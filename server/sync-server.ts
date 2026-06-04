@@ -152,7 +152,9 @@ function onConnection(conn: WebSocket, req: { url?: string }) {
 	// Decode the room name so the WS path matches express's auto-decoded :room
 	// param (otherwise "spike,畫一張" splits into two rooms — the client watches
 	// the %-encoded one while /api/agent writes the decoded one).
-	let roomName = (req.url || '/').slice(1).split('?')[0] || 'default'
+	let path = (req.url || '/').slice(1).split('?')[0]
+	if (path.startsWith('sync/')) path = path.slice(5) // strip the Vite-proxy prefix
+	let roomName = path || 'default'
 	try {
 		roomName = decodeURIComponent(roomName)
 	} catch {}

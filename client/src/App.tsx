@@ -21,8 +21,11 @@ const COLORS: Record<string, string> = {
 	red: '#f08c8c',
 	blue: '#6ba8e8',
 }
-const SYNC_HTTP = `http://${location.hostname}:1234`
-const SYNC_WS = `ws://${location.hostname}:1234`
+// Same-origin: the API and the sync websocket both go through Vite's reverse
+// proxy, so this works over http OR https (and behind a tunnel) with no hardcoded
+// port. ws upgrades to wss automatically when the page is served over https.
+const SYNC_HTTP = '' // relative -> /api/... on the current origin
+const SYNC_WS = `${location.protocol === 'https:' ? 'wss' : 'ws'}://${location.host}/sync`
 
 const DEMO_TRANSCRIPT =
 	'今天跟客戶開會討論線上預約系統。客戶現在用紙本登記,常常重複預約,想要病患自己選時段。我們報季繳方案。客戶擔心櫃台人員不會用後台,我說會做教學影片。風險是診所內網要先確認能不能對外。下一步我這邊下週三前先給一個 demo。'
@@ -262,34 +265,54 @@ export default function App() {
 			recRef.current?.stop()
 			return
 		}
-		try {
-			const stream = await navigator.mediaDevices.getUserMedia({ audio: true })
-			const chunks: BlobPart[] = []
-			const mr = new MediaRecorder(stream)
-			mr.ondataavailable = (ev) => ev.data.size && chunks.push(ev.data)
-			mr.onstop = async () => {
-				stream.getTracks().forEach((t) => t.stop())
-				setRecording(false)
-				setBusy('轉錄 + agent 中…')
-				const blob = new Blob(chunks, { type: 'audio/webm' })
-				try {
-					const r = await fetch(`${SYNC_HTTP}/api/voice/${encodeURIComponent(room)}?ext=webm`, {
-						method: 'POST',
-						headers: { 'Content-Type': 'audio/webm' },
-						body: blob,
-					}).then((x) => x.json())
-					setBusy(r.ok ? `聽到「${r.transcript || '(空)'}」→ ${r.stickies ?? 0} 張` : `錯誤:${r.error}`)
-				} catch (e) {
-					setBusy(`錯誤:${(e as Error).message}`)
-				}
-			}
-			recRef.current = mr
-			mr.start()
-			setRecording(true)
-			setBusy('錄音中…再按一次停止')
-		} catch (e) {
-			setBusy(`麥克風錯誤:${(e as Error).message}`)
+		// Mic needs a SECURE context (https or localhost). A plain http LAN IP like
+		// http://192.168.x.y is blocked by the browser → mediaDevices is undefined.
+		if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+			setBusy(
+				`麥克風被瀏覽器擋:此頁是 ${location.protocol}//${location.host},不是 localhost 也不是 HTTPS。` +
+					`要錄音的筆電請改開 http://localhost:5174;手機要錄音需要 HTTPS。`
+			)
+			return
 		}
+		let stream: MediaStream
+		try {
+			stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+		} catch (e) {
+			const name = (e as any)?.name || ''
+			const hint =
+				name === 'NotAllowedError'
+					? '(你按了拒絕,或瀏覽器擋了 — 點網址列左邊圖示把麥克風設成允許)'
+					: name === 'NotFoundError'
+						? '(系統找不到麥克風裝置)'
+						: name === 'NotReadableError'
+							? '(麥克風被別的程式佔用)'
+							: ''
+			setBusy(`麥克風錯誤:${name || (e as Error).message} ${hint}`)
+			return
+		}
+		const chunks: BlobPart[] = []
+		const mr = new MediaRecorder(stream)
+		mr.ondataavailable = (ev) => ev.data.size && chunks.push(ev.data)
+		mr.onstop = async () => {
+			stream.getTracks().forEach((t) => t.stop())
+			setRecording(false)
+			setBusy('轉錄 + agent 中…')
+			const blob = new Blob(chunks, { type: 'audio/webm' })
+			try {
+				const r = await fetch(`${SYNC_HTTP}/api/voice/${encodeURIComponent(room)}?ext=webm`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'audio/webm' },
+					body: blob,
+				}).then((x) => x.json())
+				setBusy(r.ok ? `聽到「${r.transcript || '(空)'}」→ ${r.stickies ?? 0} 張` : `錯誤:${r.error}`)
+			} catch (e) {
+				setBusy(`錯誤:${(e as Error).message}`)
+			}
+		}
+		recRef.current = mr
+		mr.start()
+		setRecording(true)
+		setBusy('錄音中…再按一次停止')
 	}
 
 	const btn: React.CSSProperties = { font: '13px system-ui', padding: '4px 8px', cursor: 'pointer' }

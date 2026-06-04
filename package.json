@@ -6,8 +6,10 @@
   "description": "FOSS twin of tldraw-agent-spike: a server-side bot draws into a self-hosted yjs (y-websocket) room, rendered on a Konva canvas. Zero-license-cost stack — sellable.",
   "scripts": {
     "dev": "concurrently -n server,client -c green,cyan \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:lan": "concurrently -n server,client -c green,cyan \"npm:dev:server\" \"npm:dev:client:https\"",
     "dev:server": "tsx watch server/sync-server.ts",
     "dev:client": "vite",
+    "dev:client:https": "HTTPS=1 vite",
     "bot": "tsx server/bot.ts",
     "build": "vite build",
     "preview": "vite preview"
