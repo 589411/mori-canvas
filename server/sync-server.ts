@@ -18,6 +18,11 @@ import * as syncProtocol from 'y-protocols/sync'
 import * as awarenessProtocol from 'y-protocols/awareness'
 import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
+import { writeFile, unlink } from 'node:fs/promises'
+import { tmpdir } from 'node:os'
+import { join as pathJoin } from 'node:path'
+import { planBoard, type BoardPlan } from './agent.ts'
+import { transcribe } from './stt.ts'
 
 const PORT = 1234
 const messageSync = 0
@@ -137,27 +142,54 @@ function onConnection(conn: WebSocket, req: { url?: string }) {
 	}
 }
 
+const rid = (p: string) => `${p}-${Math.random().toString(36).slice(2, 10)}`
+
+/** Place one sticky into the shared room. Returns its id. */
+function placeSticky(room: Room, text: string, color: string, drawnBy: string): string {
+	const shapes = room.doc.getMap('shapes')
+	const id = rid('sticky')
+	const n = shapes.size
+	shapes.set(id, {
+		id,
+		type: 'sticky',
+		x: 120 + (n % 5) * 240,
+		y: 120 + Math.floor(n / 5) * 240,
+		w: 200,
+		h: 200,
+		text,
+		color,
+		drawnBy,
+	})
+	return id
+}
+
 /** THE BOT: a server-side write into the shared room. Plain yjs, no editor. */
 function drawSticky(roomName: string, text: string, color = 'yellow'): string {
 	const room = getRoom(roomName)
-	const shapes = room.doc.getMap('shapes')
-	const id = `sticky-${Math.random().toString(36).slice(2, 10)}`
-	const n = shapes.size
+	let id = ''
 	room.doc.transact(() => {
-		shapes.set(id, {
-			id,
-			type: 'sticky',
-			x: 120 + (n % 5) * 240,
-			y: 120 + Math.floor(n / 5) * 240,
-			w: 200,
-			h: 200,
-			text,
-			color,
-			drawnBy: 'bot',
-		})
+		id = placeSticky(room, text, color, 'bot')
 	})
 	console.log(`[bot] drew sticky in "${roomName}": ${id} — "${text}"`)
 	return id
+}
+
+/** Apply an agent's board plan: create stickies + connectors atomically (1 broadcast). */
+function applyPlan(roomName: string, plan: BoardPlan, drawnBy: string): string[] {
+	const room = getRoom(roomName)
+	const ids: string[] = []
+	room.doc.transact(() => {
+		const connectors = room.doc.getMap('connectors')
+		for (const s of plan.stickies) ids.push(placeSticky(room, s.text, s.color, drawnBy))
+		for (const [a, b] of plan.connectors) {
+			if (ids[a] && ids[b]) {
+				const cid = rid('conn')
+				connectors.set(cid, { id: cid, from: ids[a], to: ids[b] })
+			}
+		}
+	})
+	console.log(`[agent] applied plan to "${roomName}": ${ids.length} stickies, ${plan.connectors.length} connectors`)
+	return ids
 }
 
 const app = express()
@@ -181,10 +213,50 @@ app.post('/api/bot/:room/sticky', (req, res) => {
 	res.json({ ok: true, room, id, text, color })
 })
 
+// Agent: transcript -> board plan (Groq->Ollama) -> stickies + connectors.
+app.post('/api/agent/:room', async (req, res) => {
+	const transcript = String(req.body?.transcript ?? '').trim()
+	if (!transcript) {
+		res.status(400).json({ ok: false, error: 'transcript required' })
+		return
+	}
+	try {
+		const { plan, provider } = await planBoard(transcript)
+		const ids = applyPlan(req.params.room, plan, 'agent')
+		res.json({ ok: true, provider, stickies: plan.stickies, connectors: plan.connectors, ids })
+	} catch (e) {
+		console.error('[agent] error', e)
+		res.status(500).json({ ok: false, error: (e as Error).message })
+	}
+})
+
+// Voice: raw audio bytes -> mori-ear STT -> agent -> board. Full chain.
+app.post('/api/voice/:room', express.raw({ type: () => true, limit: '25mb' }), async (req, res) => {
+	const ext = String(req.query.ext ?? 'webm').replace(/[^a-z0-9]/gi, '') || 'webm'
+	const tmp = pathJoin(tmpdir(), `voice-${rid('a')}.${ext}`)
+	try {
+		await writeFile(tmp, req.body as Buffer)
+		const transcript = await transcribe(tmp)
+		if (!transcript) {
+			res.json({ ok: true, transcript: '', stickies: 0, note: 'empty transcript' })
+			return
+		}
+		const { plan, provider } = await planBoard(transcript)
+		const ids = applyPlan(req.params.room, plan, 'voice')
+		res.json({ ok: true, transcript, provider, stickies: ids.length, connectors: plan.connectors.length })
+	} catch (e) {
+		console.error('[voice] error', e)
+		res.status(500).json({ ok: false, error: (e as Error).message })
+	} finally {
+		unlink(tmp).catch(() => {})
+	}
+})
+
 app.get('/api/health', (_req, res) => {
 	const detail = [...rooms.entries()].map(([id, room]) => ({
 		id,
 		shapes: room.doc.getMap('shapes').size,
+		connectors: room.doc.getMap('connectors').size,
 		online: room.conns.size,
 	}))
 	res.json({ ok: true, rooms: detail })
