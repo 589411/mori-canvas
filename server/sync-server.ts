@@ -25,6 +25,7 @@ import { tmpdir, networkInterfaces } from 'node:os'
 import { join as pathJoin } from 'node:path'
 import { planBoard, type BoardPlan } from './agent.ts'
 import { transcribe } from './stt.ts'
+import { chat } from './llm.ts'
 
 const PORT = 1234
 const messageSync = 0
@@ -445,6 +446,42 @@ function lanIp(): string | null {
 	)
 }
 app.get('/api/lan', (_req, res) => res.json({ ip: lanIp() }))
+
+// End-of-meeting: turn the board into a proper one-page meeting note (via the LLM).
+app.get('/api/summary/:room', async (req, res) => {
+	try {
+		const doc = getRoom(req.params.room).doc
+		const shapes = [...doc.getMap('shapes').values()].filter((s: any) => s.type === 'sticky') as any[]
+		const conns = [...doc.getMap('connectors').values()] as any[]
+		res.setHeader('Content-Type', 'text/markdown; charset=utf-8')
+		if (!shapes.length) {
+			res.send(`# 會議摘要:${req.params.room}\n\n(白板還沒有內容)\n`)
+			return
+		}
+		const named = (s: any) => (s.drawnBy && !['user', 'agent', 'voice', 'bot'].includes(s.drawnBy) ? `(${s.drawnBy})` : '')
+		const lines = shapes.map((s) => `- [${KIND_BY_COLOR[s.color] || '其他'}] ${s.text}${named(s)}`)
+		const rel = conns
+			.map((c) => {
+				const f = shapes.find((s) => s.id === c.from)?.text
+				const t = shapes.find((s) => s.id === c.to)?.text
+				return f && t ? `- ${f} → ${t}` : null
+			})
+			.filter(Boolean)
+		const board = `便利貼(括號內是提出者):\n${lines.join('\n')}\n\n關聯:\n${rel.join('\n') || '(無)'}`
+		const { text } = await chat([
+			{
+				role: 'system',
+				content:
+					'你是會議記錄員。根據提供的白板便利貼(已分類)整理成一頁繁體中文會議紀錄,用這些區塊:## 會議重點 / ## 決議 / ## 待辦事項(若便利貼標了提出者,在待辦後標負責人)/ ## 風險 / ## 下一步。只根據提供內容,不得編造;沒有內容的區塊就省略。直接輸出 markdown,不要前言。',
+			},
+			{ role: 'user', content: board },
+		])
+		const clean = text.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
+		res.send(`# 會議摘要:${req.params.room}\n\n${clean}\n`)
+	} catch (e) {
+		res.status(500).send('摘要失敗:' + (e as Error).message)
+	}
+})
 
 app.get('/api/health', (_req, res) => {
 	const detail = [...rooms.entries()].map(([id, room]) => ({

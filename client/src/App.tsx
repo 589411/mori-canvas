@@ -610,6 +610,12 @@ export default function App() {
 				>
 					刪除選取
 				</button>
+				<button
+					style={{ ...btn, background: '#fef9c3' }}
+					onClick={() => window.open(`${SYNC_HTTP}/api/summary/${encodeURIComponent(room)}`, '_blank')}
+				>
+					會議摘要
+				</button>
 				<button style={btn} onClick={exportMd}>
 					匯出 MD
 				</button>
