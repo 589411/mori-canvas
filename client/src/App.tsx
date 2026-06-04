@@ -105,6 +105,7 @@ export default function App() {
 	const [shareOpen, setShareOpen] = useState(false)
 	const [qrUrl, setQrUrl] = useState('')
 	const [joinCode, setJoinCode] = useState('')
+	const [roomList, setRoomList] = useState<{ id: string; shapes: number; online: number }[]>([])
 	const [panelOpen, setPanelOpen] = useState(window.innerWidth >= 700) // collapse agent panel on small screens
 
 	// presence: my identity (persistent name + colour) + everyone else's cursors
@@ -243,7 +244,16 @@ export default function App() {
 	useEffect(() => {
 		if (!shareOpen) return
 		QRCode.toDataURL(shareUrl, { width: 240, margin: 1 }).then(setQrUrl).catch(() => setQrUrl(''))
+		fetch('/api/rooms')
+			.then((r) => r.json())
+			.then((d) => setRoomList(d.rooms || []))
+			.catch(() => {})
 	}, [shareOpen, shareUrl])
+
+	async function endThisRoom() {
+		if (!window.confirm(`結束房間「${room}」?會清空給所有人。`)) return
+		await fetch(`${SYNC_HTTP}/api/rooms/${encodeURIComponent(room)}/end`, { method: 'POST' }).catch(() => {})
+	}
 
 	const byId = (id: string) => shapes.find((s) => s.id === id)
 
@@ -749,9 +759,34 @@ export default function App() {
 								加入
 							</button>
 						</div>
-						<button style={{ ...btn, marginTop: 14 }} onClick={() => setShareOpen(false)}>
-							關閉
-						</button>
+						{roomList.length > 0 && (
+							<div style={{ marginTop: 14, textAlign: 'left', maxHeight: 140, overflowY: 'auto' }}>
+								<div style={{ color: '#666', fontSize: 12, marginBottom: 4 }}>進行中的房間</div>
+								{roomList.map((r) => (
+									<div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0' }}>
+										<span style={{ flex: 1, fontWeight: r.id === room ? 700 : 400 }}>
+											{r.id} <span style={{ color: '#999', fontSize: 12 }}>· {r.online}人 · {r.shapes}張</span>
+										</span>
+										{r.id !== room && (
+											<button
+												style={{ ...btn, padding: '2px 8px' }}
+												onClick={() => (location.href = `${location.pathname}?room=${encodeURIComponent(r.id)}`)}
+											>
+												進入
+											</button>
+										)}
+									</div>
+								))}
+							</div>
+						)}
+						<div style={{ display: 'flex', gap: 6, marginTop: 14 }}>
+							<button style={{ ...btn, flex: 1, color: '#b91c1c' }} onClick={endThisRoom}>
+								結束此房(清空)
+							</button>
+							<button style={{ ...btn, flex: 1 }} onClick={() => setShareOpen(false)}>
+								關閉
+							</button>
+						</div>
 					</div>
 				</div>
 			)}

@@ -19,7 +19,7 @@ import * as awarenessProtocol from 'y-protocols/awareness'
 import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
 import { writeFile, unlink } from 'node:fs/promises'
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from 'node:fs'
 import { createHash } from 'node:crypto'
 import { tmpdir, networkInterfaces } from 'node:os'
 import { join as pathJoin } from 'node:path'
@@ -481,6 +481,32 @@ app.get('/api/summary/:room', async (req, res) => {
 	} catch (e) {
 		res.status(500).send('摘要失敗:' + (e as Error).message)
 	}
+})
+
+// Active rooms (in memory) with live counts — for the room manager.
+app.get('/api/rooms', (_req, res) => {
+	const list = [...rooms.entries()]
+		.map(([id, r]) => ({ id, shapes: r.doc.getMap('shapes').size, online: r.conns.size }))
+		.sort((a, b) => b.online - a.online || b.shapes - a.shapes)
+	res.json({ rooms: list })
+})
+
+// End a room: clear the board for everyone + drop its snapshot.
+app.post('/api/rooms/:room/end', (req, res) => {
+	const name = req.params.room
+	clearTimeout(saveTimers.get(name))
+	saveTimers.delete(name)
+	const r = rooms.get(name)
+	if (r) {
+		r.doc.transact(() => {
+			r.doc.getMap('shapes').clear()
+			r.doc.getMap('connectors').clear()
+		})
+	}
+	try {
+		if (existsSync(roomFile(name))) unlinkSync(roomFile(name))
+	} catch {}
+	res.json({ ok: true })
 })
 
 app.get('/api/health', (_req, res) => {
