@@ -343,6 +343,113 @@ export default function App() {
 	// voice: mic -> /api/voice -> ear -> agent -> board
 	const recRef = useRef<MediaRecorder | null>(null)
 	const [recording, setRecording] = useState(false)
+
+	// continuous "meeting" mode: keep listening, auto-cut a segment on each pause
+	// (silence) and send it for transcription+agent, so cards appear hands-free.
+	const [meeting, setMeeting] = useState(false)
+	const [segCount, setSegCount] = useState(0)
+	const meetingRef = useRef<{ stop: () => void } | null>(null)
+
+	function sendSegment(blob: Blob) {
+		if (!blob.size) return
+		const type = blob.type || 'audio/webm'
+		const ext = type.includes('mp4') ? 'mp4' : type.includes('ogg') ? 'ogg' : 'webm'
+		setSegCount((c) => c + 1)
+		fetch(`${SYNC_HTTP}/api/voice/${encodeURIComponent(room)}?ext=${ext}&by=${encodeURIComponent(me.name)}`, {
+			method: 'POST',
+			headers: { 'Content-Type': type },
+			body: blob,
+		}).catch(() => {})
+	}
+
+	async function startMeeting() {
+		if (!window.isSecureContext || !navigator.mediaDevices?.getUserMedia) {
+			setBusy(`麥克風被瀏覽器擋:此頁是 ${location.protocol}//${location.host},要 localhost 或 HTTPS。`)
+			return
+		}
+		let stream: MediaStream
+		try {
+			stream = await navigator.mediaDevices.getUserMedia({ audio: true })
+		} catch (e) {
+			setBusy(`麥克風錯誤:${(e as any)?.name || (e as Error).message}`)
+			return
+		}
+		setMeeting(true)
+		setSegCount(0)
+		setBusy('會議記錄中…講一段、停頓一下就會自動整理上板')
+
+		const ctx = new AudioContext()
+		const analyser = ctx.createAnalyser()
+		analyser.fftSize = 1024
+		ctx.createMediaStreamSource(stream).connect(analyser)
+		const buf = new Uint8Array(analyser.fftSize)
+
+		const SPEAK = 0.018 // RMS threshold for "speech"
+		const SILENCE_MS = 1200 // pause length that ends a segment
+		const MIN_MS = 1500 // ignore ultra-short blips
+		const MAX_MS = 25000 // force a cut on long monologues
+
+		let mr: MediaRecorder | null = null
+		let chunks: BlobPart[] = []
+		let segStart = 0
+		let spoke = false
+		let silentSince = 0
+		let alive = true
+
+		const startSeg = () => {
+			chunks = []
+			mr = new MediaRecorder(stream)
+			mr.ondataavailable = (ev) => ev.data.size && chunks.push(ev.data)
+			mr.onstop = () => sendSegment(new Blob(chunks, { type: mr?.mimeType || 'audio/webm' }))
+			mr.start()
+			segStart = performance.now()
+			spoke = false
+			silentSince = 0
+		}
+		const cut = () => {
+			try {
+				if (mr && mr.state !== 'inactive') mr.stop() // onstop sends this segment
+			} catch {}
+			if (alive) startSeg()
+		}
+		const iv = setInterval(() => {
+			if (!alive) return
+			analyser.getByteTimeDomainData(buf)
+			let sum = 0
+			for (let i = 0; i < buf.length; i++) {
+				const v = (buf[i] - 128) / 128
+				sum += v * v
+			}
+			const rms = Math.sqrt(sum / buf.length)
+			const now = performance.now()
+			if (rms > SPEAK) {
+				spoke = true
+				silentSince = 0
+			} else if (spoke && !silentSince) {
+				silentSince = now
+			}
+			const dur = now - segStart
+			if ((spoke && silentSince && now - silentSince > SILENCE_MS && dur > MIN_MS) || (spoke && dur > MAX_MS)) cut()
+		}, 120)
+
+		meetingRef.current = {
+			stop: () => {
+				alive = false
+				clearInterval(iv)
+				try {
+					if (mr && mr.state !== 'inactive') mr.stop() // flush final segment
+				} catch {}
+				stream.getTracks().forEach((t) => t.stop())
+				ctx.close().catch(() => {})
+				setMeeting(false)
+				setBusy('會議記錄結束')
+			},
+		}
+		startSeg()
+	}
+	function stopMeeting() {
+		meetingRef.current?.stop()
+	}
 	async function toggleRecord() {
 		if (recording) {
 			recRef.current?.stop()
@@ -679,13 +786,20 @@ export default function App() {
 						width: '100%',
 						marginTop: 8,
 						fontSize: 15,
-						padding: '10px',
-						background: recording ? '#fecaca' : '#e0f2fe',
+						padding: '11px',
+						background: meeting ? '#fecaca' : '#dcfce7',
 						fontWeight: 600,
 					}}
-					onClick={toggleRecord}
+					onClick={() => (meeting ? stopMeeting() : startMeeting())}
 				>
-					{recording ? '■ 停止錄音' : '● 錄音'}
+					{meeting ? `■ 停止會議記錄（已整理 ${segCount} 段）` : '● 開始會議記錄'}
+				</button>
+				<button
+					style={{ ...btn, width: '100%', marginTop: 6, fontSize: 12, background: recording ? '#fecaca' : '#f3f4f6' }}
+					onClick={toggleRecord}
+					disabled={meeting}
+				>
+					{recording ? '■ 停止' : '單次錄一段'}
 				</button>
 				{busy && <div style={{ marginTop: 6, fontSize: 12, color: '#444' }}>{busy}</div>}
 			</div>

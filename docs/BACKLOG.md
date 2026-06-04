@@ -7,7 +7,7 @@
 ## Tier 1 — 能真的開會 + 手機可用
 - [x] **1. 手機 UI 優化** — toolbar/面板 responsive、觸控好按、錄音/分享鈕明顯;Konva 雙指縮放。早上手機測的前提。
 - [x] **2. agent 改寫/合併/刪除既有卡** — BoardPlan 改 op-based(add/update/merge/delete),長會議板不再只進不出。
-- [ ] **3. 即時串流轉錄** — 連續錄音 + 靜音自動斷句 + rolling transcript + 句界才打 agent。語音從 demo 變會議工具的分水嶺(最大、最有風險)。
+- [~] **3. 即時串流轉錄**(已實作,VAD 門檻待真麥克風調) — 連續錄音 + 靜音自動斷句 + rolling transcript + 句界才打 agent。語音從 demo 變會議工具的分水嶺(最大、最有風險)。
 
 ## Tier 2 — 會議品質
 - [x] **4. Speaker attribution** — 卡片標「誰錄的」(用 awareness 身份),多人錄分得出誰說的。
