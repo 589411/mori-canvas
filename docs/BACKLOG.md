@@ -10,7 +10,7 @@
 - [ ] **3. 即時串流轉錄** — 連續錄音 + 靜音自動斷句 + rolling transcript + 句界才打 agent。語音從 demo 變會議工具的分水嶺(最大、最有風險)。
 
 ## Tier 2 — 會議品質
-- [ ] **4. Speaker attribution** — 卡片標「誰錄的」(用 awareness 身份),多人錄分得出誰說的。
+- [x] **4. Speaker attribution** — 卡片標「誰錄的」(用 awareness 身份),多人錄分得出誰說的。
 - [ ] **5. 結束會議 → 一頁摘要** — 真摘要(決議/待辦/負責人),走 LLM cascade,不是便利貼清單。
 - [ ] **6. 房間管理** — 列出有哪些房、可結束/刪除、看人數;`/api/rooms` + UI。
 

@@ -368,10 +368,11 @@ app.post('/api/agent/:room', async (req, res) => {
 		return
 	}
 	try {
+		const by = (String(req.body?.by ?? '').trim() || 'agent').slice(0, 24)
 		const out = await withRoomLock(req.params.room, async () => {
 			const existing = existingStickies(getRoom(req.params.room))
 			const { plan, provider } = await planBoard(transcript, existing.map((e) => e.text))
-			const r = await applyPlan(req.params.room, plan, 'agent', existing.map((e) => e.id))
+			const r = await applyPlan(req.params.room, plan, by, existing.map((e) => e.id))
 			return { provider, added: plan.stickies, connectors: r.connectorsDrawn, ids: r.ids }
 		})
 		res.json({ ok: true, ...out })
@@ -392,10 +393,11 @@ app.post('/api/voice/:room', express.raw({ type: () => true, limit: '25mb' }), a
 			res.json({ ok: true, transcript: '', stickies: 0, note: 'empty transcript' })
 			return
 		}
+		const by = (String(req.query.by ?? '').trim() || 'voice').slice(0, 24)
 		const out = await withRoomLock(req.params.room, async () => {
 			const existing = existingStickies(getRoom(req.params.room))
 			const { plan, provider } = await planBoard(transcript, existing.map((e) => e.text))
-			const r = await applyPlan(req.params.room, plan, 'voice', existing.map((e) => e.id))
+			const r = await applyPlan(req.params.room, plan, by, existing.map((e) => e.id))
 			return { provider, stickies: r.ids.length, connectors: r.connectorsDrawn }
 		})
 		res.json({ ok: true, transcript, ...out })

@@ -107,14 +107,17 @@ export default function App() {
 	const [joinCode, setJoinCode] = useState('')
 	const [panelOpen, setPanelOpen] = useState(window.innerWidth >= 700) // collapse agent panel on small screens
 
-	// presence: my identity + everyone else's live cursors (Mori included)
-	const me = useMemo(
-		() => ({
-			name: 'User-' + Math.random().toString(36).slice(2, 5),
-			color: ['#e11d48', '#0891b2', '#ea580c', '#16a34a', '#9333ea'][Math.floor(Math.random() * 5)],
-		}),
+	// presence: my identity (persistent name + colour) + everyone else's cursors
+	const [myName, setMyName] = useState(() => localStorage.getItem('wb-name') || '訪客-' + genCode(3))
+	const myColor = useMemo(
+		() => ['#e11d48', '#0891b2', '#ea580c', '#16a34a', '#9333ea'][Math.floor(Math.random() * 5)],
 		[]
 	)
+	const me = useMemo(() => ({ name: myName, color: myColor }), [myName, myColor])
+	useEffect(() => {
+		localStorage.setItem('wb-name', myName)
+		;(provider as any).awareness.setLocalStateField('user', me)
+	}, [me, provider, myName])
 	const [cursors, setCursors] = useState<{ id: number; name: string; color: string; x: number; y: number }[]>([])
 	const cursorTs = useRef(0)
 
@@ -319,7 +322,7 @@ export default function App() {
 			const r = await fetch(`${SYNC_HTTP}/api/agent/${encodeURIComponent(room)}`, {
 				method: 'POST',
 				headers: { 'Content-Type': 'application/json' },
-				body: JSON.stringify({ transcript: agentText }),
+				body: JSON.stringify({ transcript: agentText, by: me.name }),
 			}).then((x) => x.json())
 			setBusy(r.ok ? `agent(${r.provider}):+${r.added?.length ?? 0} 張、+${r.connectors ?? 0} 連線` : `錯誤:${r.error}`)
 		} catch (e) {
@@ -373,11 +376,10 @@ export default function App() {
 			const ext = type.includes('mp4') ? 'mp4' : type.includes('ogg') ? 'ogg' : 'webm'
 			const blob = new Blob(chunks, { type })
 			try {
-				const r = await fetch(`${SYNC_HTTP}/api/voice/${encodeURIComponent(room)}?ext=${ext}`, {
-					method: 'POST',
-					headers: { 'Content-Type': type },
-					body: blob,
-				}).then((x) => x.json())
+				const r = await fetch(
+					`${SYNC_HTTP}/api/voice/${encodeURIComponent(room)}?ext=${ext}&by=${encodeURIComponent(me.name)}`,
+					{ method: 'POST', headers: { 'Content-Type': type }, body: blob }
+				).then((x) => x.json())
 				setBusy(r.ok ? `聽到「${r.transcript || '(空)'}」→ ${r.stickies ?? 0} 張` : `錯誤:${r.error}`)
 			} catch (e) {
 				setBusy(`錯誤:${(e as Error).message}`)
@@ -514,6 +516,9 @@ export default function App() {
 									align="center"
 									verticalAlign="middle"
 								/>
+								{s.drawnBy && s.drawnBy !== 'user' && (
+									<Text text={s.drawnBy} x={10} y={s.h - 19} fontSize={11} fill="rgba(0,0,0,0.5)" />
+								)}
 							</Group>
 						)
 					})}
@@ -695,6 +700,15 @@ export default function App() {
 							boxShadow: '0 8px 30px rgba(0,0,0,0.3)',
 						}}
 					>
+						<div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 12 }}>
+							<span style={{ color: '#666', fontSize: 13, whiteSpace: 'nowrap' }}>你的名字</span>
+							<input
+								value={myName}
+								onChange={(e) => setMyName(e.target.value.slice(0, 24))}
+								placeholder="會議裡顯示的名字"
+								style={{ flex: 1, font: '14px system-ui', padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
+							/>
+						</div>
 						<div style={{ color: '#666', fontSize: 13 }}>用手機掃 QR,或輸入房號加入</div>
 						<div style={{ fontSize: 40, fontWeight: 700, letterSpacing: 4, margin: '8px 0 14px' }}>{room}</div>
 						{qrUrl ? (
