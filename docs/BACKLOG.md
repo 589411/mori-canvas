@@ -15,9 +15,9 @@
 - [x] **6. 房間管理** — 列出有哪些房、可結束/刪除、看人數;`/api/rooms` + UI。
 
 ## Tier 3 — 硬化 / 隱私 / 部署
-- [ ] **7. Rate-limit + room 數/大小上限** — 便宜的 DoS / 燒額度防護。
-- [ ] **8. 可切純本機 LLM** — qwen3-first 開關,讓逐字稿完全不出內網(敏感會議)。
-- [ ] **9. 做成服務** — systemd unit + 啟動腳本 + nginx 反代範例(對接你「nginx 內部」部署)。
+- [x] **7. Rate-limit + room 數/大小上限** — 便宜的 DoS / 燒額度防護。
+- [x] **8. 可切純本機 LLM** — qwen3-first 開關,讓逐字稿完全不出內網(敏感會議)。
+- [x] **9. 做成服務** — systemd unit + 啟動腳本 + nginx 反代範例(對接你「nginx 內部」部署)。
 
 ## Tier 4 — polish(有時間才做)
 - [ ] **10. Connector 方向語意上色 + 標籤** — 不再全灰;雙擊改 label。

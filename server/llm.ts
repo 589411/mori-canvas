@@ -74,6 +74,10 @@ async function callOllama(messages: Msg[], json: boolean): Promise<string> {
 /** Try Groq first; on any failure fall back to local Ollama. */
 export async function chat(messages: Msg[], opts: { json?: boolean } = {}): Promise<{ text: string; provider: string }> {
 	const json = !!opts.json
+	// LLM_LOCAL_ONLY=1 → never call the cloud; meeting transcripts stay on the LAN.
+	if (process.env.LLM_LOCAL_ONLY === '1') {
+		return { text: await callOllama(messages, json), provider: 'ollama(local-only)' }
+	}
 	try {
 		return { text: await callGroq(messages, json), provider: 'groq:gpt-oss-120b' }
 	} catch (e) {

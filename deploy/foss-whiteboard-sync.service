@@ -1,0 +1,22 @@
+# systemd unit — keeps the sync server running (loopback). nginx fronts it (see nginx.conf.example).
+# install:  sudo cp deploy/foss-whiteboard-sync.service /etc/systemd/system/
+#           sudo systemctl daemon-reload && sudo systemctl enable --now foss-whiteboard-sync
+# logs:     journalctl -u foss-whiteboard-sync -f
+[Unit]
+Description=foss-whiteboard sync server (yjs + agent + voice)
+After=network.target
+
+[Service]
+Type=simple
+User=ct
+WorkingDirectory=/home/ct/mori-universe/foss-whiteboard-spike
+# -lc loads the login shell so node/npx are on PATH (adjust the path/user as needed)
+ExecStart=/bin/bash -lc 'npx tsx server/sync-server.ts'
+Environment=HOST=127.0.0.1
+# uncomment to keep meeting transcripts on the LAN (use local qwen3, never the cloud):
+# Environment=LLM_LOCAL_ONLY=1
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

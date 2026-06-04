@@ -379,6 +379,22 @@ app.use('/api', (req, res, next) => {
 	res.status(401).json({ ok: false, error: 'unauthorized' })
 })
 
+// simple per-IP rate limit for the expensive endpoints (guards Groq/STT abuse)
+const RL_MAX = Number(process.env.RATE_MAX || 30) // requests / minute / IP
+const rlHits = new Map<string, number[]>()
+function rateLimit(req: express.Request, res: express.Response, next: express.NextFunction) {
+	const ip = req.ip || req.socket.remoteAddress || 'x'
+	const now = Date.now()
+	const arr = (rlHits.get(ip) || []).filter((t) => now - t < 60_000)
+	if (arr.length >= RL_MAX) {
+		res.status(429).json({ ok: false, error: '太頻繁,請稍候再試' })
+		return
+	}
+	arr.push(now)
+	rlHits.set(ip, arr)
+	next()
+}
+
 app.post('/api/bot/:room/sticky', (req, res) => {
 	const { room } = req.params
 	const text: string = req.body?.text ?? `bot @ ${new Date().toLocaleTimeString()}`
@@ -389,7 +405,7 @@ app.post('/api/bot/:room/sticky', (req, res) => {
 
 // Agent: transcript -> board plan (Groq->Ollama) -> stickies + connectors.
 // Wrapped in a per-room lock so concurrent runs queue instead of racing.
-app.post('/api/agent/:room', async (req, res) => {
+app.post('/api/agent/:room', rateLimit, async (req, res) => {
 	const transcript = String(req.body?.transcript ?? '').trim()
 	if (!transcript) {
 		res.status(400).json({ ok: false, error: 'transcript required' })
@@ -411,7 +427,7 @@ app.post('/api/agent/:room', async (req, res) => {
 })
 
 // Voice: raw audio bytes -> mori-ear STT -> agent -> board. Full chain.
-app.post('/api/voice/:room', express.raw({ type: () => true, limit: '25mb' }), async (req, res) => {
+app.post('/api/voice/:room', rateLimit, express.raw({ type: () => true, limit: '25mb' }), async (req, res) => {
 	const ext = String(req.query.ext ?? 'webm').replace(/[^a-z0-9]/gi, '') || 'webm'
 	const tmp = pathJoin(tmpdir(), `voice-${rid('a')}.${ext}`)
 	try {

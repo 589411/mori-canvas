@@ -1,0 +1,41 @@
+# nginx reverse proxy — internal-only, fronts the built client + the sync server.
+# Build the client first:  npm run build   (outputs client/dist)
+# Then point a server block here. nginx handles TLS; the sync server stays on loopback.
+
+server {
+    listen 443 ssl;
+    server_name whiteboard.your-internal-domain;     # or an internal IP
+
+    ssl_certificate     /etc/ssl/whiteboard/cert.pem;  # your real/internal cert
+    ssl_certificate_key /etc/ssl/whiteboard/key.pem;
+
+    # --- internal-only access (adjust to your LAN) ---
+    allow 192.168.0.0/16;
+    allow 10.0.0.0/8;
+    deny  all;
+
+    # --- built client (static) ---
+    root  /home/ct/mori-universe/foss-whiteboard-spike/client/dist;
+    index index.html;
+    location / {
+        try_files $uri /index.html;
+    }
+
+    # --- API -> sync server on loopback ---
+    location /api/ {
+        proxy_pass http://127.0.0.1:1234;
+        client_max_body_size 25m;            # voice uploads
+    }
+
+    # --- sync websocket -> sync server on loopback ---
+    location /sync/ {
+        proxy_pass http://127.0.0.1:1234;
+        proxy_http_version 1.1;
+        proxy_set_header Upgrade $http_upgrade;
+        proxy_set_header Connection "upgrade";
+        proxy_read_timeout 1h;               # keep long-lived ws open
+    }
+}
+
+# Because the client talks same-origin (/api, /sync), the share/QR URL is
+# automatically this nginx hostname — nothing to configure in the app.
