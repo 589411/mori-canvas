@@ -51,13 +51,19 @@ async function callOllama(messages: Msg[], json: boolean): Promise<string> {
 	const cfg = moriConfig()
 	const base = cfg?.providers?.ollama?.base_url ?? 'http://localhost:11434'
 	const model = cfg?.providers?.ollama?.model ?? 'qwen3:8b'
-	const body: any = { model, messages, stream: false, options: { num_ctx: 8192 } }
+	// think:false — qwen3 is a thinking model; leaving it on burns CPU and can leak <think> (README gotcha #5)
+	const body: any = { model, messages, stream: false, think: false, options: { num_ctx: 8192 } }
 	if (json) body.format = 'json'
-	const res = await fetch(`${base.replace(/\/$/, '')}/api/chat`, {
-		method: 'POST',
-		headers: { 'Content-Type': 'application/json' },
-		body: JSON.stringify(body),
-	})
+	let res: Response
+	try {
+		res = await fetch(`${base.replace(/\/$/, '')}/api/chat`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(body),
+		})
+	} catch (e) {
+		throw new Error(`ollama unreachable at ${base} — is 'ollama serve' running? (${(e as Error).message})`)
+	}
 	if (!res.ok) throw new Error(`ollama ${res.status}`)
 	const data: any = await res.json()
 	const content = data?.message?.content
@@ -71,7 +77,12 @@ export async function chat(messages: Msg[], opts: { json?: boolean } = {}): Prom
 	try {
 		return { text: await callGroq(messages, json), provider: 'groq:gpt-oss-120b' }
 	} catch (e) {
-		console.warn(`[llm] groq failed (${(e as Error).message}); falling back to ollama`)
-		return { text: await callOllama(messages, json), provider: 'ollama' }
+		const groqErr = (e as Error).message
+		console.warn(`[llm] groq failed (${groqErr}); falling back to ollama`)
+		try {
+			return { text: await callOllama(messages, json), provider: 'ollama' }
+		} catch (oe) {
+			throw new Error(`both LLM providers failed — groq: ${groqErr}; ollama: ${(oe as Error).message}`)
+		}
 	}
 }

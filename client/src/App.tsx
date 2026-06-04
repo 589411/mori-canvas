@@ -39,14 +39,16 @@ function edgePoint(cx: number, cy: number, hw: number, hh: number, tx: number, t
 export default function App() {
 	const room = new URLSearchParams(location.search).get('room') ?? 'spike'
 
-	const { doc, yShapes, yConnectors, provider } = useMemo(() => {
+	const { doc, yShapes, yConnectors, provider, undoMgr, LOCAL } = useMemo(() => {
 		const doc = new Y.Doc()
 		const provider = new WebsocketProvider(SYNC_WS, room, doc)
 		const yShapes = doc.getMap<Sticky>('shapes')
 		const yConnectors = doc.getMap<Connector>('connectors')
+		const LOCAL = { local: true } // origin tag so undo only tracks MY edits, not remote/Mori
+		const undoMgr = new Y.UndoManager([yShapes, yConnectors], { trackedOrigins: new Set([LOCAL]) })
 		;(window as any).__getShapes = () => Array.from(yShapes.values())
 		;(window as any).__getConnectors = () => Array.from(yConnectors.values())
-		return { doc, yShapes, yConnectors, provider }
+		return { doc, yShapes, yConnectors, provider, undoMgr, LOCAL }
 	}, [room])
 
 	const [shapes, setShapes] = useState<Sticky[]>([])
@@ -55,12 +57,15 @@ export default function App() {
 	const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight })
 	const [view, setView] = useState({ x: 0, y: 0, scale: 1 }) // canvas pan/zoom
 	const [selectedId, setSelectedId] = useState<string | null>(null)
+	const [selectedConnId, setSelectedConnId] = useState<string | null>(null)
 	const [connectMode, setConnectMode] = useState(false)
 	const [connectFrom, setConnectFrom] = useState<string | null>(null)
 	const [editing, setEditing] = useState<{ id: string; value: string } | null>(null)
 	const [agentText, setAgentText] = useState(DEMO_TRANSCRIPT)
 	const [busy, setBusy] = useState('')
 	const editRef = useRef<HTMLTextAreaElement>(null)
+	const stageRef = useRef<any>(null)
+	const dragTs = useRef(0)
 
 	// presence: my identity + everyone else's live cursors (Mori included)
 	const me = useMemo(
@@ -73,8 +78,8 @@ export default function App() {
 	const [cursors, setCursors] = useState<{ id: number; name: string; color: string; x: number; y: number }[]>([])
 	const cursorTs = useRef(0)
 
-	// --- yjs mutations (all wrapped in one transaction) ---
-	const tx = (fn: () => void) => doc.transact(fn)
+	// --- yjs mutations (tagged LOCAL so the UndoManager tracks them) ---
+	const tx = (fn: () => void) => doc.transact(fn, LOCAL)
 	const patchShape = (id: string, patch: Partial<Sticky>) => {
 		const cur = yShapes.get(id)
 		if (cur) tx(() => yShapes.set(id, { ...cur, ...patch }))
@@ -93,11 +98,24 @@ export default function App() {
 		const id = `conn-${Math.random().toString(36).slice(2, 10)}`
 		tx(() => yConnectors.set(id, { id, from, to }))
 	}
+	const deleteConnector = (id: string) => tx(() => yConnectors.delete(id))
 	const clearAll = () =>
 		tx(() => {
 			yShapes.clear()
 			yConnectors.clear()
 		})
+
+	function exportMd() {
+		window.open(`${SYNC_HTTP}/api/export/${encodeURIComponent(room)}`, '_blank')
+	}
+	function exportPng() {
+		const uri = stageRef.current?.toDataURL({ pixelRatio: 2 })
+		if (!uri) return
+		const a = document.createElement('a')
+		a.href = uri
+		a.download = `whiteboard-${room}.png`
+		a.click()
+	}
 
 	useEffect(() => {
 		const sync = () => setShapes(Array.from(yShapes.values()))
@@ -134,23 +152,42 @@ export default function App() {
 		}
 	}, [yShapes, yConnectors, provider])
 
-	// keyboard delete (but not while editing text)
+	// keyboard: undo/redo + delete (but not while editing text)
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
 			if (editing) return
-			if ((e.key === 'Delete' || e.key === 'Backspace') && selectedId) {
+			const mod = e.ctrlKey || e.metaKey
+			if (mod && e.key.toLowerCase() === 'z') {
 				e.preventDefault()
-				deleteSticky(selectedId)
-				setSelectedId(null)
+				if (e.shiftKey) undoMgr.redo()
+				else undoMgr.undo()
+				return
+			}
+			if (mod && e.key.toLowerCase() === 'y') {
+				e.preventDefault()
+				undoMgr.redo()
+				return
+			}
+			if (e.key === 'Delete' || e.key === 'Backspace') {
+				if (selectedId) {
+					e.preventDefault()
+					deleteSticky(selectedId)
+					setSelectedId(null)
+				} else if (selectedConnId) {
+					e.preventDefault()
+					deleteConnector(selectedConnId)
+					setSelectedConnId(null)
+				}
 			}
 			if (e.key === 'Escape') {
 				setSelectedId(null)
+				setSelectedConnId(null)
 				setConnectFrom(null)
 			}
 		}
 		window.addEventListener('keydown', onKey)
 		return () => window.removeEventListener('keydown', onKey)
-	}, [selectedId, editing])
+	}, [selectedId, selectedConnId, editing, undoMgr])
 
 	useEffect(() => {
 		if (editing) editRef.current?.focus()
@@ -264,6 +301,7 @@ export default function App() {
 	return (
 		<div style={{ position: 'fixed', inset: 0, background: '#fafafa' }}>
 			<Stage
+				ref={stageRef}
 				width={size.w}
 				height={size.h}
 				x={view.x}
@@ -281,6 +319,7 @@ export default function App() {
 				onMouseDown={(e: any) => {
 					if (e.target === e.target.getStage()) {
 						setSelectedId(null)
+						setSelectedConnId(null)
 						setConnectFrom(null)
 					}
 				}}
@@ -298,15 +337,25 @@ export default function App() {
 						const bc: [number, number] = [b.x + b.w / 2, b.y + b.h / 2]
 						const [x1, y1] = edgePoint(ac[0], ac[1], a.w / 2, a.h / 2, bc[0], bc[1])
 						const [x2, y2] = edgePoint(bc[0], bc[1], b.w / 2, b.h / 2, ac[0], ac[1])
+						const sel = c.id === selectedConnId
 						return (
 							<Arrow
 								key={c.id}
 								points={[x1, y1, x2, y2]}
-								stroke="#555"
-								fill="#555"
-								strokeWidth={2}
+								stroke={sel ? '#2563eb' : '#555'}
+								fill={sel ? '#2563eb' : '#555'}
+								strokeWidth={sel ? 4 : 2}
+								hitStrokeWidth={16}
 								pointerLength={9}
 								pointerWidth={9}
+								onClick={() => {
+									setSelectedConnId(c.id)
+									setSelectedId(null)
+								}}
+								onTap={() => {
+									setSelectedConnId(c.id)
+									setSelectedId(null)
+								}}
 							/>
 						)
 					})}
@@ -320,7 +369,13 @@ export default function App() {
 								y={s.y}
 								draggable
 								onDragStart={() => setSelectedId(s.id)}
-								onDragMove={(e: any) => patchShape(s.id, { x: e.target.x(), y: e.target.y() })}
+								onDragMove={(e: any) => {
+									const now = Date.now()
+									if (now - dragTs.current < 40) return // throttle yjs writes during drag
+									dragTs.current = now
+									patchShape(s.id, { x: e.target.x(), y: e.target.y() })
+								}}
+								onDragEnd={(e: any) => patchShape(s.id, { x: e.target.x(), y: e.target.y() })}
 								onClick={() => onStickyClick(s)}
 								onTap={() => onStickyClick(s)}
 								onDblClick={(e: any) => {
@@ -424,20 +479,43 @@ export default function App() {
 				>
 					{connectMode ? '連線模式:開(點兩張)' : '連線模式'}
 				</button>
-				<button style={btn} onClick={() => selectedId && deleteSticky(selectedId)}>
+				<button style={btn} title="復原 Ctrl+Z" onClick={() => undoMgr.undo()}>
+					↶
+				</button>
+				<button style={btn} title="重做 Ctrl+Shift+Z" onClick={() => undoMgr.redo()}>
+					↷
+				</button>
+				<button
+					style={btn}
+					onClick={() => {
+						if (selectedId) deleteSticky(selectedId)
+						else if (selectedConnId) deleteConnector(selectedConnId)
+					}}
+				>
 					刪除選取
+				</button>
+				<button style={btn} onClick={exportMd}>
+					匯出 MD
+				</button>
+				<button style={btn} onClick={exportPng}>
+					匯出 PNG
 				</button>
 				<button style={btn} onClick={() => setView({ x: 0, y: 0, scale: 1 })}>
 					回正
 				</button>
-				<button style={btn} onClick={clearAll}>
+				<button
+					style={btn}
+					onClick={() => {
+						if (window.confirm('清空整個房間給所有人?')) clearAll()
+					}}
+				>
 					清空
 				</button>
 			</div>
 
 			{/* hint */}
 			<div style={hint}>
-				雙擊空白新增 · 雙擊便利貼改字 · 拖拉移動 · 點選後 Delete 刪除 · 空白處拖曳平移 · 滾輪縮放
+				雙擊空白新增 · 雙擊改字 · 拖拉移動 · 點便利貼/連線後 Delete 刪除 · Ctrl+Z 復原 · 空白拖曳平移 · 滾輪縮放
 			</div>
 
 			{/* agent / voice panel */}

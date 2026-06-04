@@ -31,6 +31,27 @@ agent/錄音是 **累積 + 智慧合併**:每次把白板現有便利貼餵給 a
 - **持久化**:每個房間的 Y.Doc 快照存到 `.data/<room>.bin`(debounce 寫),server 重啟自動還原,不再一重啟就清空。
 - 驗證:便利貼進度 `[0,1,2,3,4,5]` 逐張出現;Mori 游標串流期間出現、結束消失;兩個分頁互看游標;`persisttest` 房重啟後從磁碟還原。
 
+### v0.4:多視角審查後的硬化 + 完善(audit-driven)
+
+跑了一輪多 agent code 審查(5 面向 → 對抗式驗證 25 條),把真 bug 與便宜高價值項做掉:
+
+**修掉的真 bug**
+- **並發競態**:同房同時跑兩個 agent/voice 會讓便利貼疊在同格、Mori 游標亂跳/畫到一半消失 → 加 **per-room 序列化鎖** + 格子座標改在 transact 內讀 live `shapes.size`(TOCTOU-safe)。驗證:兩個並發 agent → 10 張位置全不重疊、游標不卡。
+- **重啟丟資料**:debounce 500ms 寫盤,`tsx watch`/Ctrl-C 在視窗內重啟會 silent 丟最後的編輯 → 加 **SIGTERM/SIGINT graceful flush**。驗證:寫完立刻 SIGINT,快照仍被 flush、重啟還原。
+- **中文長房名持久化失效**:房名 →`encodeURIComponent` 檔名,~28+ 個中文字超過 255 byte 上限 → 靜默失敗 → 長名改 **sha1 hash 檔名**。
+- **Mori 游標卡死**:applyPlan 失敗時不清游標 → 包 **try/finally** 一定收掉。
+- **壞 JSON 回 500**:`parseLenient` 的 `JSON.parse` 無 try/catch → 加容錯降級成空 plan。
+- **連線數謊報**:回報規劃數而非實際畫出數 → 改回傳真正 `connectorsDrawn` + skip 時 warn。
+- **Ollama fallback**:補 `think:false`(qwen3 thinking 雷)+ 連不到時給「ollama serve 沒開」可讀訊息 + 合併 groq 失敗原因。
+
+**便宜硬化(預設不擋本機 demo)**
+- 預設 **bind `127.0.0.1`**(設 `HOST=0.0.0.0` 才對外)、**選用 API key**(設 `WB_API_KEY` 才要求 `X-API-Key`)、CORS 可用 `ALLOWED_ORIGINS` 收緊、prompt 把逐字稿包進不可信邊界(擋 prompt injection)。
+
+**新功能**
+- **Undo/Redo**(`Y.UndoManager`,只追蹤自己的編輯,不會撤到 Mori/別人):Ctrl+Z / Ctrl+Shift+Z、工具列 ↶ ↷。
+- **匯出**:`匯出 MD`(會後 markdown 紀錄,按 kind 分區 主題/決議/待辦/風險 + 關聯)、`匯出 PNG`(Konva backing-store)。
+- **單獨選取/刪除連線**(點箭頭→反白→Delete)、**清空二次確認**、拖拉節流(40ms)+ onDragEnd commit。
+
 ## 架構
 
 | 部件 | 檔案 | 說明 |
@@ -85,8 +106,9 @@ curl -X POST 'localhost:1234/api/voice/spike?ext=wav' \
 
 ## 下一步(此 spike 之外)
 
-- connectors 方向語意上色 / 加標籤。
-- room 生命週期 + 鑑權(目前任何人可進任何房)。
-- 把它接成 Mori 的白板「身體部件」,語音來源走 mori-ear 的即時串流而非一次錄一段。
-- 智慧合併再進化:讓 agent 也能「改寫/合併」既有便利貼,而不只是新增。
-- 持久化升級:目前是整份快照覆寫,大板可改增量 append log。
+兩個最大的還沒做(留待接 Mori body interface 時):
+- **即時串流轉錄**:目前是「錄一段才送批次」,真會議要 mori-ear 連續串流 + 語意邊界才打 agent。
+- **agent 改寫/合併/刪除既有便利貼**:目前 agent 只能 append(決議翻案、待辦完成只會再貼一張)。需把 BoardPlan 擴成 op-based。
+
+較小的:
+- connectors 方向語意上色 / 加標籤;room 列表/landing/分享連結;rate-limit;持久化改增量 append log;同一張便利貼欄位級並發(目前整顆 LWW)。
