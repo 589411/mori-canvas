@@ -15,19 +15,23 @@ const COLOR_BY_KIND: Record<string, string> = {
 	risk: 'red',
 }
 
-const SYSTEM = `你是會議白板助手。給你一段會議逐字稿,請把重點拆成便利貼,鋪在共享白板上,並用連線表達關係。
+const SYSTEM = `你是會議白板助手。給你一段會議逐字稿,把重點拆成便利貼鋪在白板上,並用連線表達它們之間的關係。
 
-只輸出一個 JSON 物件(不要任何說明文字、不要 markdown 圍欄),格式:
+只輸出一個 JSON 物件(不要任何說明文字、不要 markdown 圍欄、不要 <think>),格式:
 {
   "stickies": [ { "text": "<繁中短語,最多 14 字>", "kind": "topic|todo|decision|risk" } ],
-  "connectors": [ [<fromIndex>, <toIndex>] ]
+  "connectors": [ { "from": <索引整數>, "to": <索引整數> } ]
 }
 
 規則:
-- 最多 6 張便利貼。每張 text 是精簡的繁體中文短語(名詞片語),不是整句。
+- 最多 6 張便利貼。每張 text 是精簡的繁體中文短語(名詞片語),不是整句,別超過 14 字。
 - kind:主題=topic、待辦=todo、決議=decision、風險=risk。
-- connectors 是 stickies 陣列的索引配對,表示「導向 / 依賴 / 衍生」。沒有關係就給 []。
-- 只根據逐字稿,不得編造逐字稿沒有的內容。`
+- connectors 用 from/to 兩個「便利貼索引」(從 0 開始)表達關係:主題衍生出的待辦/風險/決議、問題對應的解法。**畫關係連線是正常整理、不算編造**,只要兩張在邏輯上相關就連,盡量連 2~4 條。
+- from / to 一定是分開的兩個整數,不要黏成一個數字或字串。
+- 只根據逐字稿,不得編造逐字稿沒有的「內容」(但連線屬於整理關係,可放心畫)。
+
+範例:
+{"stickies":[{"text":"線上預約系統","kind":"topic"},{"text":"重複預約問題","kind":"risk"},{"text":"製作教學影片","kind":"todo"}],"connectors":[{"from":0,"to":1},{"from":0,"to":2}]}`
 
 function parseLenient(raw: string): BoardPlan {
 	let s = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
@@ -45,13 +49,20 @@ function parseLenient(raw: string): BoardPlan {
 		}))
 		.filter((x: StickyPlan) => x.text.length > 0)
 	const n = stickies.length
+	const toIdx = (v: any): number => {
+		const x = typeof v === 'number' ? v : parseInt(String(v), 10)
+		return Number.isInteger(x) ? x : NaN
+	}
 	const connectors: [number, number][] = (Array.isArray(obj.connectors) ? obj.connectors : [])
+		.map((c: any): [number, number] => {
+			// accept {from,to} OR [from,to]
+			if (Array.isArray(c) && c.length >= 2) return [toIdx(c[0]), toIdx(c[1])]
+			if (c && typeof c === 'object') return [toIdx(c.from), toIdx(c.to)]
+			return [NaN, NaN]
+		})
 		.filter(
-			(c: any) =>
-				Array.isArray(c) && c.length === 2 && Number.isInteger(c[0]) && Number.isInteger(c[1]) &&
-				c[0] >= 0 && c[1] >= 0 && c[0] < n && c[1] < n && c[0] !== c[1]
+			([a, b]) => Number.isInteger(a) && Number.isInteger(b) && a >= 0 && b >= 0 && a < n && b < n && a !== b
 		)
-		.map((c: any) => [c[0], c[1]] as [number, number])
 	return { stickies, connectors }
 }
 

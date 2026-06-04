@@ -90,7 +90,13 @@ function getRoom(name: string): Room {
 
 function onConnection(conn: WebSocket, req: { url?: string }) {
 	conn.binaryType = 'arraybuffer'
-	const roomName = (req.url || '/').slice(1).split('?')[0] || 'default'
+	// Decode the room name so the WS path matches express's auto-decoded :room
+	// param (otherwise "spike,畫一張" splits into two rooms — the client watches
+	// the %-encoded one while /api/agent writes the decoded one).
+	let roomName = (req.url || '/').slice(1).split('?')[0] || 'default'
+	try {
+		roomName = decodeURIComponent(roomName)
+	} catch {}
 	const room = getRoom(roomName)
 	room.conns.set(conn, new Set())
 	console.log(`[sync] client joined "${roomName}" (${room.conns.size} online)`)
@@ -174,13 +180,37 @@ function drawSticky(roomName: string, text: string, color = 'yellow'): string {
 	return id
 }
 
-/** Apply an agent's board plan: create stickies + connectors atomically (1 broadcast). */
+/**
+ * Apply an agent's board plan atomically (1 broadcast):
+ *  - clears the PREVIOUS auto-generated output (drawnBy agent/voice) so re-runs
+ *    don't pile up and bury under a growing offset; keeps the user's own stickies.
+ *  - lays the new stickies out in a fixed, always-visible 4-wide grid at top-left.
+ */
 function applyPlan(roomName: string, plan: BoardPlan, drawnBy: string): string[] {
 	const room = getRoom(roomName)
+	const shapes = room.doc.getMap('shapes')
+	const connectors = room.doc.getMap('connectors')
 	const ids: string[] = []
 	room.doc.transact(() => {
-		const connectors = room.doc.getMap('connectors')
-		for (const s of plan.stickies) ids.push(placeSticky(room, s.text, s.color, drawnBy))
+		// wipe prior auto output + any now-dangling connectors
+		for (const [sid, s] of shapes) if ((s as any).drawnBy === 'agent' || (s as any).drawnBy === 'voice') shapes.delete(sid)
+		for (const [cid, c] of connectors) if (!shapes.has((c as any).from) || !shapes.has((c as any).to)) connectors.delete(cid)
+		// place in a visible grid (independent of how many shapes already exist)
+		plan.stickies.forEach((s, i) => {
+			const id = rid('sticky')
+			shapes.set(id, {
+				id,
+				type: 'sticky',
+				x: 120 + (i % 4) * 250,
+				y: 120 + Math.floor(i / 4) * 240,
+				w: 200,
+				h: 200,
+				text: s.text,
+				color: s.color,
+				drawnBy,
+			})
+			ids.push(id)
+		})
 		for (const [a, b] of plan.connectors) {
 			if (ids[a] && ids[b]) {
 				const cid = rid('conn')
