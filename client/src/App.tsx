@@ -1,5 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from 'react'
-import { Stage, Layer, Group, Rect, Text, Arrow } from 'react-konva'
+import { Stage, Layer, Group, Rect, Text, Arrow, Circle } from 'react-konva'
 import * as Y from 'yjs'
 import { WebsocketProvider } from 'y-websocket'
 
@@ -62,6 +62,17 @@ export default function App() {
 	const [busy, setBusy] = useState('')
 	const editRef = useRef<HTMLTextAreaElement>(null)
 
+	// presence: my identity + everyone else's live cursors (Mori included)
+	const me = useMemo(
+		() => ({
+			name: 'User-' + Math.random().toString(36).slice(2, 5),
+			color: ['#e11d48', '#0891b2', '#ea580c', '#16a34a', '#9333ea'][Math.floor(Math.random() * 5)],
+		}),
+		[]
+	)
+	const [cursors, setCursors] = useState<{ id: number; name: string; color: string; x: number; y: number }[]>([])
+	const cursorTs = useRef(0)
+
 	// --- yjs mutations (all wrapped in one transaction) ---
 	const tx = (fn: () => void) => doc.transact(fn)
 	const patchShape = (id: string, patch: Partial<Sticky>) => {
@@ -95,6 +106,19 @@ export default function App() {
 		syncC()
 		yShapes.observe(sync)
 		yConnectors.observe(syncC)
+		// presence: track everyone else's cursors (Mori + other humans)
+		const aw = (provider as any).awareness
+		const updateCursors = () => {
+			const out: { id: number; name: string; color: string; x: number; y: number }[] = []
+			aw.getStates().forEach((st: any, cid: number) => {
+				if (cid === aw.clientID || !st?.cursor || !st?.user) return
+				out.push({ id: cid, name: st.user.name, color: st.user.color, x: st.cursor.x, y: st.cursor.y })
+			})
+			setCursors(out)
+		}
+		aw.on('change', updateCursors)
+		aw.setLocalStateField('user', me)
+		updateCursors()
 		const onStatus = (e: { status: string }) => setStatus(e.status)
 		provider.on('status', onStatus)
 		provider.on('sync', (s: boolean) => s && setStatus('synced'))
@@ -103,6 +127,7 @@ export default function App() {
 		return () => {
 			yShapes.unobserve(sync)
 			yConnectors.unobserve(syncC)
+			aw.off('change', updateCursors)
 			provider.off('status', onStatus)
 			window.removeEventListener('resize', onResize)
 			provider.destroy()
@@ -166,6 +191,17 @@ export default function App() {
 		setView({ scale: next, x: pointer.x - worldX * next, y: pointer.y - worldY * next })
 	}
 
+	function publishCursor(e: any) {
+		const now = Date.now()
+		if (now - cursorTs.current < 50) return
+		cursorTs.current = now
+		const p = e.target.getStage().getRelativePointerPosition()
+		if (p) (provider as any).awareness.setLocalState({ user: me, cursor: { x: p.x, y: p.y } })
+	}
+	function clearCursor() {
+		;(provider as any).awareness.setLocalState({ user: me, cursor: null })
+	}
+
 	async function runAgent() {
 		if (!agentText.trim()) return
 		setBusy('agent 思考中…')
@@ -223,6 +259,7 @@ export default function App() {
 
 	// exposed for verification / console poking
 	;(window as any).__wb = { addSticky, patchShape, deleteSticky, addConnector, clearAll }
+	;(window as any).__cursors = cursors
 
 	return (
 		<div style={{ position: 'fixed', inset: 0, background: '#fafafa' }}>
@@ -247,6 +284,8 @@ export default function App() {
 						setConnectFrom(null)
 					}
 				}}
+				onMouseMove={publishCursor}
+				onMouseLeave={clearCursor}
 				onDblClick={onStageDblClick}
 			>
 				<Layer>
@@ -315,6 +354,14 @@ export default function App() {
 							</Group>
 						)
 					})}
+					{/* live cursors of everyone else (Mori + other humans) */}
+					{cursors.map((c) => (
+						<Group key={c.id} x={c.x} y={c.y} listening={false}>
+							<Circle radius={6} fill={c.color} stroke="#fff" strokeWidth={1.5} />
+							<Rect x={10} y={-9} width={c.name.length * 8 + 12} height={18} cornerRadius={4} fill={c.color} />
+							<Text x={16} y={-6} text={c.name} fontSize={12} fontStyle="bold" fill="#fff" />
+						</Group>
+					))}
 				</Layer>
 			</Stage>
 

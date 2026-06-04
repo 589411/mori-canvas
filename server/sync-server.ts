@@ -19,6 +19,7 @@ import * as awarenessProtocol from 'y-protocols/awareness'
 import * as encoding from 'lib0/encoding'
 import * as decoding from 'lib0/decoding'
 import { writeFile, unlink } from 'node:fs/promises'
+import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { tmpdir } from 'node:os'
 import { join as pathJoin } from 'node:path'
 import { planBoard, type BoardPlan } from './agent.ts'
@@ -35,6 +36,37 @@ type Room = {
 }
 
 const rooms = new Map<string, Room>()
+
+// --- persistence: per-room Y.Doc snapshot on disk (survives server restart) ---
+const DATA_DIR = pathJoin(process.cwd(), '.data')
+mkdirSync(DATA_DIR, { recursive: true })
+const roomFile = (name: string) => pathJoin(DATA_DIR, encodeURIComponent(name) + '.bin')
+const saveTimers = new Map<string, NodeJS.Timeout>()
+
+function loadSnapshot(name: string, doc: Y.Doc) {
+	const f = roomFile(name)
+	if (existsSync(f)) {
+		try {
+			Y.applyUpdate(doc, readFileSync(f), 'persistence')
+		} catch (e) {
+			console.warn(`[persist] load failed for "${name}":`, (e as Error).message)
+		}
+	}
+}
+
+function scheduleSave(name: string, doc: Y.Doc) {
+	clearTimeout(saveTimers.get(name))
+	saveTimers.set(
+		name,
+		setTimeout(() => {
+			try {
+				writeFileSync(roomFile(name), Y.encodeStateAsUpdate(doc))
+			} catch (e) {
+				console.warn(`[persist] save failed for "${name}":`, (e as Error).message)
+			}
+		}, 500)
+	)
+}
 
 function send(conn: WebSocket, data: Uint8Array) {
 	if (conn.readyState !== conn.OPEN && conn.readyState !== conn.CONNECTING) return
@@ -56,15 +88,17 @@ function getRoom(name: string): Room {
 	if (room) return room
 
 	const doc = new Y.Doc()
+	loadSnapshot(name, doc) // restore persisted board, if any
 	const awareness = new awarenessProtocol.Awareness(doc)
 	const r: Room = { doc, awareness, conns: new Map() }
 
-	// Any doc change (from a client OR the server-side bot) → broadcast to all.
-	doc.on('update', (update: Uint8Array) => {
+	// Any doc change (from a client OR the server-side bot) → broadcast + persist.
+	doc.on('update', (update: Uint8Array, origin: unknown) => {
 		const enc = encoding.createEncoder()
 		encoding.writeVarUint(enc, messageSync)
 		syncProtocol.writeUpdate(enc, update)
 		broadcast(r, encoding.toUint8Array(enc))
+		if (origin !== 'persistence') scheduleSave(name, doc)
 	})
 
 	awareness.on('update', (
@@ -180,6 +214,13 @@ function drawSticky(roomName: string, text: string, color = 'yellow'): string {
 	return id
 }
 
+const sleep = (ms: number) => new Promise<void>((r) => setTimeout(r, ms))
+
+/** Publish (or clear) "Mori"'s live cursor on a room via awareness, so every client sees it. */
+function setMoriCursor(room: Room, cursor: { x: number; y: number } | null) {
+	room.awareness.setLocalState(cursor ? { user: { name: 'Mori', color: '#7c3aed' }, cursor } : null)
+}
+
 /** Existing stickies in a STABLE order (by id) — the same order fed to the agent. */
 function existingStickies(room: Room): { id: string; text: string }[] {
 	return [...room.doc.getMap('shapes').values()]
@@ -195,30 +236,35 @@ function existingStickies(room: Room): { id: string; text: string }[] {
  *    is the id list (same order) that was shown to the agent, so we can resolve
  *    a connector endpoint to either an existing sticky or a freshly-created one.
  */
-function applyPlan(roomName: string, plan: BoardPlan, drawnBy: string, existingIds: string[]): string[] {
+async function applyPlan(
+	roomName: string,
+	plan: BoardPlan,
+	drawnBy: string,
+	existingIds: string[]
+): Promise<string[]> {
 	const room = getRoom(roomName)
 	const shapes = room.doc.getMap('shapes')
 	const connectors = room.doc.getMap('connectors')
 	const newIds: string[] = []
 	const E = existingIds.length
+	const startN = shapes.size
+
+	// Stream the stickies in one-by-one, moving Mori's live cursor to each so
+	// every connected human sees Mori actually drawing on the shared board.
+	for (let i = 0; i < plan.stickies.length; i++) {
+		const s = plan.stickies[i]
+		const n = startN + i
+		const x = 120 + (n % 5) * 240
+		const y = 120 + Math.floor(n / 5) * 240
+		setMoriCursor(room, { x: x + 100, y: y + 100 })
+		await sleep(180)
+		const id = rid('sticky')
+		room.doc.transact(() => shapes.set(id, { id, type: 'sticky', x, y, w: 200, h: 200, text: s.text, color: s.color, drawnBy }))
+		newIds.push(id)
+		await sleep(120)
+	}
+
 	room.doc.transact(() => {
-		const startN = shapes.size
-		plan.stickies.forEach((s, i) => {
-			const id = rid('sticky')
-			const n = startN + i
-			shapes.set(id, {
-				id,
-				type: 'sticky',
-				x: 120 + (n % 5) * 240,
-				y: 120 + Math.floor(n / 5) * 240,
-				w: 200,
-				h: 200,
-				text: s.text,
-				color: s.color,
-				drawnBy,
-			})
-			newIds.push(id)
-		})
 		const resolve = (idx: number): string | undefined => (idx < E ? existingIds[idx] : newIds[idx - E])
 		for (const [a, b] of plan.connectors) {
 			const from = resolve(a)
@@ -229,6 +275,8 @@ function applyPlan(roomName: string, plan: BoardPlan, drawnBy: string, existingI
 			}
 		}
 	})
+	await sleep(400)
+	setMoriCursor(room, null) // Mori leaves the board
 	console.log(`[agent] +${newIds.length} stickies, +${plan.connectors.length} connectors in "${roomName}"`)
 	return newIds
 }
@@ -264,7 +312,7 @@ app.post('/api/agent/:room', async (req, res) => {
 	try {
 		const existing = existingStickies(getRoom(req.params.room))
 		const { plan, provider } = await planBoard(transcript, existing.map((e) => e.text))
-		const ids = applyPlan(req.params.room, plan, 'agent', existing.map((e) => e.id))
+		const ids = await applyPlan(req.params.room, plan, 'agent', existing.map((e) => e.id))
 		res.json({ ok: true, provider, added: plan.stickies, connectors: plan.connectors.length, ids })
 	} catch (e) {
 		console.error('[agent] error', e)
@@ -285,7 +333,7 @@ app.post('/api/voice/:room', express.raw({ type: () => true, limit: '25mb' }), a
 		}
 		const existing = existingStickies(getRoom(req.params.room))
 		const { plan, provider } = await planBoard(transcript, existing.map((e) => e.text))
-		const ids = applyPlan(req.params.room, plan, 'voice', existing.map((e) => e.id))
+		const ids = await applyPlan(req.params.room, plan, 'voice', existing.map((e) => e.id))
 		res.json({ ok: true, transcript, provider, stickies: ids.length, connectors: plan.connectors.length })
 	} catch (e) {
 		console.error('[voice] error', e)

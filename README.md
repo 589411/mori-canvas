@@ -23,6 +23,14 @@ agent/錄音是 **累積 + 智慧合併**:每次把白板現有便利貼餵給 a
 
 底層仍是前一版證好的:server 端寫共享 Y.Doc → 所有瀏覽器 <15ms 即時看到。全 MIT,無 tldraw 那顆 production license。
 
+### v0.3:Mori 出現在板上 + 持久化
+
+![presence](docs/presence.png)
+
+- **Mori 是看得見的參與者**:agent 寫便利貼時用 yjs awareness 廣播 Mori 的游標,便利貼**一張一張串流冒出**、游標跟著移動,畫完離開。所有連線的人即時看到「Mori 正在畫」。(上圖綠色 `User-5kj` 是另一個分頁的真人游標 —— 人類彼此的游標也即時可見。)
+- **持久化**:每個房間的 Y.Doc 快照存到 `.data/<room>.bin`(debounce 寫),server 重啟自動還原,不再一重啟就清空。
+- 驗證:便利貼進度 `[0,1,2,3,4,5]` 逐張出現;Mori 游標串流期間出現、結束消失;兩個分頁互看游標;`persisttest` 房重啟後從磁碟還原。
+
 ## 架構
 
 | 部件 | 檔案 | 說明 |
@@ -77,8 +85,8 @@ curl -X POST 'localhost:1234/api/voice/spike?ext=wav' \
 
 ## 下一步(此 spike 之外)
 
-- agent 串流增量上板(目前一段一次到位)、connectors 方向語意上色。
-- 給 agent 自己的 awareness cursor/presence(讓人看到「Mori 正在寫哪張」)。
-- 持久化(目前 in-memory,server 重啟即清空)+ room 生命週期 + 鑑權。
+- connectors 方向語意上色 / 加標籤。
+- room 生命週期 + 鑑權(目前任何人可進任何房)。
 - 把它接成 Mori 的白板「身體部件」,語音來源走 mori-ear 的即時串流而非一次錄一段。
 - 智慧合併再進化:讓 agent 也能「改寫/合併」既有便利貼,而不只是新增。
+- 持久化升級:目前是整份快照覆寫,大板可改增量 append log。
