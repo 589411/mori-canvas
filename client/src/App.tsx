@@ -101,9 +101,11 @@ export default function App() {
 	const editRef = useRef<HTMLTextAreaElement>(null)
 	const stageRef = useRef<any>(null)
 	const dragTs = useRef(0)
+	const pinchRef = useRef(0)
 	const [shareOpen, setShareOpen] = useState(false)
 	const [qrUrl, setQrUrl] = useState('')
 	const [joinCode, setJoinCode] = useState('')
+	const [panelOpen, setPanelOpen] = useState(window.innerWidth >= 700) // collapse agent panel on small screens
 
 	// presence: my identity + everyone else's live cursors (Mori included)
 	const me = useMemo(
@@ -275,6 +277,30 @@ export default function App() {
 		setView({ scale: next, x: pointer.x - worldX * next, y: pointer.y - worldY * next })
 	}
 
+	function onTouchMove(e: any) {
+		const t = e.evt.touches
+		if (!t || t.length !== 2) return
+		e.evt.preventDefault()
+		const stage = e.target.getStage()
+		stage.stopDrag() // two fingers = zoom, not pan
+		const p1 = { x: t[0].clientX, y: t[0].clientY }
+		const p2 = { x: t[1].clientX, y: t[1].clientY }
+		const dist = Math.hypot(p2.x - p1.x, p2.y - p1.y)
+		const cx = (p1.x + p2.x) / 2
+		const cy = (p1.y + p2.y) / 2
+		if (pinchRef.current) {
+			const old = view.scale
+			const wx = (cx - view.x) / old
+			const wy = (cy - view.y) / old
+			const next = Math.max(0.25, Math.min(3, old * (dist / pinchRef.current)))
+			setView({ scale: next, x: cx - wx * next, y: cy - wy * next })
+		}
+		pinchRef.current = dist
+	}
+	function onTouchEnd() {
+		pinchRef.current = 0
+	}
+
 	function publishCursor(e: any) {
 		const now = Date.now()
 		if (now - cursorTs.current < 50) return
@@ -341,11 +367,15 @@ export default function App() {
 			stream.getTracks().forEach((t) => t.stop())
 			setRecording(false)
 			setBusy('轉錄 + agent 中…')
-			const blob = new Blob(chunks, { type: 'audio/webm' })
+			// iOS Safari often records mp4/aac, not webm — use the actual mimeType so
+			// the file extension matches (mori-ear/Groq Whisper accept mp4/m4a/ogg/webm).
+			const type = mr.mimeType || 'audio/webm'
+			const ext = type.includes('mp4') ? 'mp4' : type.includes('ogg') ? 'ogg' : 'webm'
+			const blob = new Blob(chunks, { type })
 			try {
-				const r = await fetch(`${SYNC_HTTP}/api/voice/${encodeURIComponent(room)}?ext=webm`, {
+				const r = await fetch(`${SYNC_HTTP}/api/voice/${encodeURIComponent(room)}?ext=${ext}`, {
 					method: 'POST',
-					headers: { 'Content-Type': 'audio/webm' },
+					headers: { 'Content-Type': type },
 					body: blob,
 				}).then((x) => x.json())
 				setBusy(r.ok ? `聽到「${r.transcript || '(空)'}」→ ${r.stickies ?? 0} 張` : `錯誤:${r.error}`)
@@ -359,7 +389,15 @@ export default function App() {
 		setBusy('錄音中…再按一次停止')
 	}
 
-	const btn: React.CSSProperties = { font: '13px system-ui', padding: '4px 8px', cursor: 'pointer' }
+	const mobile = size.w < 700
+	const btn: React.CSSProperties = {
+		font: '13px system-ui',
+		padding: mobile ? '8px 12px' : '5px 10px',
+		cursor: 'pointer',
+		borderRadius: 6,
+		border: '1px solid #ccc',
+		background: '#fff',
+	}
 
 	// exposed for verification / console poking
 	;(window as any).__wb = { addSticky, patchShape, deleteSticky, addConnector, clearAll }
@@ -392,7 +430,10 @@ export default function App() {
 				}}
 				onMouseMove={publishCursor}
 				onMouseLeave={clearCursor}
+				onTouchMove={onTouchMove}
+				onTouchEnd={onTouchEnd}
 				onDblClick={onStageDblClick}
+				onDblTap={onStageDblClick}
 			>
 				<Layer>
 					{/* connectors behind stickies */}
@@ -583,28 +624,48 @@ export default function App() {
 				</button>
 			</div>
 
-			{/* hint */}
-			<div style={hint}>
-				雙擊空白新增 · 雙擊改字 · 拖拉移動 · 點便利貼/連線後 Delete 刪除 · Ctrl+Z 復原 · 空白拖曳平移 · 滾輪縮放
-			</div>
-
-			{/* agent / voice panel */}
-			<div style={panel}>
-				<div style={{ fontWeight: 600, marginBottom: 4 }}>會議 → 白板</div>
-				<textarea
-					value={agentText}
-					onChange={(e) => setAgentText(e.target.value)}
-					placeholder="貼一段會議逐字稿…"
-					style={{ width: 300, height: 70, font: '12px system-ui', resize: 'vertical' }}
-				/>
-				<div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-					<button style={btn} onClick={runAgent}>
-						丟給 agent
-					</button>
-					<button style={{ ...btn, background: recording ? '#fecaca' : undefined }} onClick={toggleRecord}>
-						{recording ? '■ 停止' : '● 錄音'}
-					</button>
+			{/* hint (desktop only) */}
+			{!mobile && (
+				<div style={hint}>
+					雙擊空白新增 · 雙擊改字 · 拖拉移動 · 點便利貼/連線後 Delete 刪除 · Ctrl+Z 復原 · 空白拖曳平移 · 滾輪縮放
 				</div>
+			)}
+
+			{/* agent / voice panel (collapsible; record stays visible) */}
+			<div style={{ ...panel, width: mobile ? 'min(86vw, 320px)' : 320, left: mobile ? 8 : 12 }}>
+				<div
+					onClick={() => setPanelOpen((o) => !o)}
+					style={{ fontWeight: 600, cursor: 'pointer', userSelect: 'none' }}
+				>
+					{panelOpen ? '▾' : '▸'} 會議 → 白板
+				</div>
+				{panelOpen && (
+					<>
+						<textarea
+							value={agentText}
+							onChange={(e) => setAgentText(e.target.value)}
+							placeholder="貼一段會議逐字稿…"
+							style={{ width: '100%', height: 70, font: '12px system-ui', resize: 'vertical', boxSizing: 'border-box', marginTop: 6 }}
+						/>
+						<button style={{ ...btn, width: '100%', marginTop: 6 }} onClick={runAgent}>
+							丟給 agent
+						</button>
+					</>
+				)}
+				<button
+					style={{
+						...btn,
+						width: '100%',
+						marginTop: 8,
+						fontSize: 15,
+						padding: '10px',
+						background: recording ? '#fecaca' : '#e0f2fe',
+						fontWeight: 600,
+					}}
+					onClick={toggleRecord}
+				>
+					{recording ? '■ 停止錄音' : '● 錄音'}
+				</button>
 				{busy && <div style={{ marginTop: 6, fontSize: 12, color: '#444' }}>{busy}</div>}
 			</div>
 
@@ -685,12 +746,15 @@ const bar: React.CSSProperties = {
 	transform: 'translateX(-50%)',
 	zIndex: 1000,
 	display: 'flex',
-	gap: 10,
+	flexWrap: 'wrap',
+	justifyContent: 'center',
+	maxWidth: '96vw',
+	gap: 6,
 	alignItems: 'center',
 	background: 'rgba(255,255,255,0.94)',
 	border: '1px solid #ddd',
 	borderRadius: 8,
-	padding: '6px 12px',
+	padding: '6px 10px',
 	font: '13px system-ui, sans-serif',
 	boxShadow: '0 1px 4px rgba(0,0,0,0.12)',
 }
