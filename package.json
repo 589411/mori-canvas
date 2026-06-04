@@ -1,0 +1,39 @@
+{
+  "name": "foss-whiteboard-spike",
+  "version": "0.1.0",
+  "private": true,
+  "type": "module",
+  "description": "FOSS twin of tldraw-agent-spike: a server-side bot draws into a self-hosted yjs (y-websocket) room, rendered on a Konva canvas. Zero-license-cost stack — sellable.",
+  "scripts": {
+    "dev": "concurrently -n server,client -c green,cyan \"npm:dev:server\" \"npm:dev:client\"",
+    "dev:server": "tsx watch server/sync-server.ts",
+    "dev:client": "vite",
+    "bot": "tsx server/bot.ts",
+    "build": "vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "express": "^5.2.1",
+    "konva": "^10.3.0",
+    "lib0": "^0.2.117",
+    "react": "^19.2.7",
+    "react-dom": "^19.2.7",
+    "react-konva": "^19.2.4",
+    "ws": "^8.21.0",
+    "y-protocols": "^1.0.7",
+    "y-websocket": "^3.0.0",
+    "yjs": "^13.6.31"
+  },
+  "devDependencies": {
+    "@types/express": "^5.0.6",
+    "@types/node": "^25.9.1",
+    "@types/react": "^19.2.16",
+    "@types/react-dom": "^19.2.3",
+    "@types/ws": "^8.18.1",
+    "@vitejs/plugin-react": "^6.0.2",
+    "concurrently": "^10.0.3",
+    "tsx": "^4.22.4",
+    "typescript": "^6.0.3",
+    "vite": "^8.0.16"
+  }
+}
