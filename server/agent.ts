@@ -30,10 +30,18 @@ const SYSTEM = `你是會議白板助手。給你一段會議逐字稿,把重點
 - from / to 一定是分開的兩個整數,不要黏成一個數字或字串。
 - 只根據逐字稿,不得編造逐字稿沒有的「內容」(但連線屬於整理關係,可放心畫)。
 
-範例:
+【累積模式】如果使用者訊息附了「目前白板已有的便利貼」清單(帶索引),代表這是同一場會議的後續片段:
+- stickies 只輸出「這段逐字稿帶出的、清單裡還沒有的新重點」,不要重列已有的;若這段沒有任何新東西,stickies 給 []。
+- 索引是延續的:已有便利貼用清單上的索引,你新增的便利貼從清單長度開始接續編號。
+- connectors 的 from/to 可以指向已有索引,也可以指向你新增的索引(把新重點接到相關的舊便利貼上)。
+
+範例(空白白板):
 {"stickies":[{"text":"線上預約系統","kind":"topic"},{"text":"重複預約問題","kind":"risk"},{"text":"製作教學影片","kind":"todo"}],"connectors":[{"from":0,"to":1},{"from":0,"to":2}]}`
 
-function parseLenient(raw: string): BoardPlan {
+// connectors are validated against a UNIFIED index space:
+//   0 .. existingCount-1   -> notes already on the board
+//   existingCount .. total -> the new notes in this plan
+function parseLenient(raw: string, existingCount = 0): BoardPlan {
 	let s = raw.replace(/<think>[\s\S]*?<\/think>/gi, '').trim()
 	s = s.replace(/^```(?:json)?/i, '').replace(/```$/, '').trim()
 	const a = s.indexOf('{')
@@ -48,31 +56,44 @@ function parseLenient(raw: string): BoardPlan {
 			color: COLOR_BY_KIND[x?.kind] ?? (typeof x?.color === 'string' ? x.color : 'yellow'),
 		}))
 		.filter((x: StickyPlan) => x.text.length > 0)
-	const n = stickies.length
+	const total = existingCount + stickies.length
 	const toIdx = (v: any): number => {
 		const x = typeof v === 'number' ? v : parseInt(String(v), 10)
 		return Number.isInteger(x) ? x : NaN
 	}
 	const connectors: [number, number][] = (Array.isArray(obj.connectors) ? obj.connectors : [])
 		.map((c: any): [number, number] => {
-			// accept {from,to} OR [from,to]
 			if (Array.isArray(c) && c.length >= 2) return [toIdx(c[0]), toIdx(c[1])]
 			if (c && typeof c === 'object') return [toIdx(c.from), toIdx(c.to)]
 			return [NaN, NaN]
 		})
 		.filter(
-			([a, b]) => Number.isInteger(a) && Number.isInteger(b) && a >= 0 && b >= 0 && a < n && b < n && a !== b
+			([a, b]) =>
+				Number.isInteger(a) && Number.isInteger(b) && a >= 0 && b >= 0 && a < total && b < total && a !== b
 		)
 	return { stickies, connectors }
 }
 
-export async function planBoard(transcript: string): Promise<{ plan: BoardPlan; provider: string }> {
+/**
+ * Plan a board from a transcript. If `existing` (texts already on the board) is
+ * given, the agent only adds genuinely-new notes and may connect them to the
+ * existing ones — connector indices use the unified space documented above.
+ */
+export async function planBoard(
+	transcript: string,
+	existing: string[] = []
+): Promise<{ plan: BoardPlan; provider: string }> {
+	const existingBlock = existing.length
+		? `\n\n目前白板已有的便利貼(索引 0..${existing.length - 1},不要重複):\n` +
+			existing.map((t, i) => `${i}. ${t}`).join('\n') +
+			`\n你新增的便利貼索引從 ${existing.length} 開始。`
+		: ''
 	const { text, provider } = await chat(
 		[
 			{ role: 'system', content: SYSTEM },
-			{ role: 'user', content: `逐字稿:\n${transcript}` },
+			{ role: 'user', content: `逐字稿:\n${transcript}${existingBlock}` },
 		],
 		{ json: true }
 	)
-	return { plan: parseLenient(text), provider }
+	return { plan: parseLenient(text, existing.length), provider }
 }

@@ -53,6 +53,7 @@ export default function App() {
 	const [connectors, setConnectors] = useState<Connector[]>([])
 	const [status, setStatus] = useState('connecting')
 	const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight })
+	const [view, setView] = useState({ x: 0, y: 0, scale: 1 }) // canvas pan/zoom
 	const [selectedId, setSelectedId] = useState<string | null>(null)
 	const [connectMode, setConnectMode] = useState(false)
 	const [connectFrom, setConnectFrom] = useState<string | null>(null)
@@ -147,10 +148,22 @@ export default function App() {
 	function onStageDblClick(e: any) {
 		// only when clicking empty canvas (target is the stage itself)
 		if (e.target !== e.target.getStage()) return
-		const pos = e.target.getStage().getPointerPosition()
+		// relative pointer position accounts for pan/zoom -> canvas coords
+		const pos = e.target.getStage().getRelativePointerPosition()
 		const id = addSticky(pos.x - 100, pos.y - 100, '', 'yellow')
 		setEditing({ id, value: '' })
 		setSelectedId(id)
+	}
+
+	function onWheel(e: any) {
+		e.evt.preventDefault()
+		const stage = e.target.getStage()
+		const pointer = stage.getPointerPosition()
+		const old = view.scale
+		const worldX = (pointer.x - view.x) / old
+		const worldY = (pointer.y - view.y) / old
+		const next = Math.max(0.25, Math.min(3, e.evt.deltaY > 0 ? old / 1.1 : old * 1.1))
+		setView({ scale: next, x: pointer.x - worldX * next, y: pointer.y - worldY * next })
 	}
 
 	async function runAgent() {
@@ -162,7 +175,7 @@ export default function App() {
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ transcript: agentText }),
 			}).then((x) => x.json())
-			setBusy(r.ok ? `agent(${r.provider}):${r.stickies?.length ?? 0} 張、${r.connectors?.length ?? 0} 連線` : `錯誤:${r.error}`)
+			setBusy(r.ok ? `agent(${r.provider}):+${r.added?.length ?? 0} 張、+${r.connectors ?? 0} 連線` : `錯誤:${r.error}`)
 		} catch (e) {
 			setBusy(`錯誤:${(e as Error).message}`)
 		}
@@ -216,6 +229,18 @@ export default function App() {
 			<Stage
 				width={size.w}
 				height={size.h}
+				x={view.x}
+				y={view.y}
+				scaleX={view.scale}
+				scaleY={view.scale}
+				draggable
+				onWheel={onWheel}
+				onDragMove={(e: any) => {
+					if (e.target === e.target.getStage()) setView((v) => ({ ...v, x: e.target.x(), y: e.target.y() }))
+				}}
+				onDragEnd={(e: any) => {
+					if (e.target === e.target.getStage()) setView((v) => ({ ...v, x: e.target.x(), y: e.target.y() }))
+				}}
 				onMouseDown={(e: any) => {
 					if (e.target === e.target.getStage()) {
 						setSelectedId(null)
@@ -315,14 +340,17 @@ export default function App() {
 							}}
 							style={{
 								position: 'fixed',
-								left: s.x + 8,
-								top: s.y + 8,
-								width: s.w - 16,
-								height: s.h - 16,
+								// map canvas coords -> screen through the pan/zoom transform
+								left: view.x + s.x * view.scale,
+								top: view.y + s.y * view.scale,
+								width: s.w * view.scale,
+								height: s.h * view.scale,
 								border: '2px solid #2563eb',
 								borderRadius: 6,
 								padding: 8,
-								font: '18px system-ui',
+								boxSizing: 'border-box',
+								fontSize: 18 * view.scale,
+								fontFamily: 'system-ui',
 								textAlign: 'center',
 								resize: 'none',
 								background: COLORS[s.color] ?? s.color,
@@ -352,13 +380,18 @@ export default function App() {
 				<button style={btn} onClick={() => selectedId && deleteSticky(selectedId)}>
 					刪除選取
 				</button>
+				<button style={btn} onClick={() => setView({ x: 0, y: 0, scale: 1 })}>
+					回正
+				</button>
 				<button style={btn} onClick={clearAll}>
 					清空
 				</button>
 			</div>
 
 			{/* hint */}
-			<div style={hint}>雙擊空白處新增便利貼 · 雙擊便利貼改字 · 拖拉移動 · 點選後 Delete 刪除</div>
+			<div style={hint}>
+				雙擊空白新增 · 雙擊便利貼改字 · 拖拉移動 · 點選後 Delete 刪除 · 空白處拖曳平移 · 滾輪縮放
+			</div>
 
 			{/* agent / voice panel */}
 			<div style={panel}>

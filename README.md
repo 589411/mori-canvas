@@ -17,7 +17,9 @@
 |---|---|---|
 | **1. agent loop** | 逐字稿 → Groq(`gpt-oss-120b`)→ 結構化 JSON(便利貼+連線),失敗 fallback 本機 Ollama `qwen3:8b` | 真 Groq 從會議稿抽 6 張正確 zh-TW 便利貼;qwen3:8b 也實測可回 JSON |
 | **2. mori-ear STT** | 錄音 → `/api/voice` → `mori-ear --input`(宇宙單一 STT)→ 逐字稿 → agent → 板 | 真 wav 經 mori-ear 轉出「嗯,我在聽。」;voice endpoint 全鏈路跑通 |
-| **3. Konva 互動** | 拖拉移動、雙擊空白新增、雙擊改字、連線模式、選取刪除、清空 | 拖拉(patchShape)即時同步、連線箭頭渲染、agent 結果即時上板 — 像素級驗證 |
+| **3. Konva 互動** | 拖拉移動、雙擊空白新增、雙擊改字、連線模式、選取刪除、清空、**空白拖曳平移 + 滾輪縮放** | 拖拉(patchShape)即時同步、連線箭頭渲染、agent 結果即時上板 — 像素級驗證 |
+
+agent/錄音是 **累積 + 智慧合併**:每次把白板現有便利貼餵給 agent,它只加「這段新講到的」重點(不重複),連線可接到既有便利貼;連兩段不同主題會累積成一張會議板而非重畫。
 
 底層仍是前一版證好的:server 端寫共享 Y.Doc → 所有瀏覽器 <15ms 即時看到。全 MIT,無 tldraw 那顆 production license。
 
@@ -75,7 +77,8 @@ curl -X POST 'localhost:1234/api/voice/spike?ext=wav' \
 
 ## 下一步(此 spike 之外)
 
-- agent 串流增量上板(目前一次到位)、connectors 的方向語意(依賴/導向)上色。
+- agent 串流增量上板(目前一段一次到位)、connectors 方向語意上色。
 - 給 agent 自己的 awareness cursor/presence(讓人看到「Mori 正在寫哪張」)。
 - 持久化(目前 in-memory,server 重啟即清空)+ room 生命週期 + 鑑權。
 - 把它接成 Mori 的白板「身體部件」,語音來源走 mori-ear 的即時串流而非一次錄一段。
+- 智慧合併再進化:讓 agent 也能「改寫/合併」既有便利貼,而不只是新增。

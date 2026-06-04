@@ -180,46 +180,57 @@ function drawSticky(roomName: string, text: string, color = 'yellow'): string {
 	return id
 }
 
+/** Existing stickies in a STABLE order (by id) — the same order fed to the agent. */
+function existingStickies(room: Room): { id: string; text: string }[] {
+	return [...room.doc.getMap('shapes').values()]
+		.filter((s: any) => s.type === 'sticky')
+		.sort((a: any, b: any) => (a.id < b.id ? -1 : 1))
+		.map((s: any) => ({ id: s.id, text: s.text }))
+}
+
 /**
- * Apply an agent's board plan atomically (1 broadcast):
- *  - clears the PREVIOUS auto-generated output (drawnBy agent/voice) so re-runs
- *    don't pile up and bury under a growing offset; keeps the user's own stickies.
- *  - lays the new stickies out in a fixed, always-visible 4-wide grid at top-left.
+ * Apply a board plan by ACCUMULATING (merge mode):
+ *  - new stickies are appended (grid by total count), existing ones untouched.
+ *  - connector indices are in the unified space [existing... , new...]; `existingIds`
+ *    is the id list (same order) that was shown to the agent, so we can resolve
+ *    a connector endpoint to either an existing sticky or a freshly-created one.
  */
-function applyPlan(roomName: string, plan: BoardPlan, drawnBy: string): string[] {
+function applyPlan(roomName: string, plan: BoardPlan, drawnBy: string, existingIds: string[]): string[] {
 	const room = getRoom(roomName)
 	const shapes = room.doc.getMap('shapes')
 	const connectors = room.doc.getMap('connectors')
-	const ids: string[] = []
+	const newIds: string[] = []
+	const E = existingIds.length
 	room.doc.transact(() => {
-		// wipe prior auto output + any now-dangling connectors
-		for (const [sid, s] of shapes) if ((s as any).drawnBy === 'agent' || (s as any).drawnBy === 'voice') shapes.delete(sid)
-		for (const [cid, c] of connectors) if (!shapes.has((c as any).from) || !shapes.has((c as any).to)) connectors.delete(cid)
-		// place in a visible grid (independent of how many shapes already exist)
+		const startN = shapes.size
 		plan.stickies.forEach((s, i) => {
 			const id = rid('sticky')
+			const n = startN + i
 			shapes.set(id, {
 				id,
 				type: 'sticky',
-				x: 120 + (i % 4) * 250,
-				y: 120 + Math.floor(i / 4) * 240,
+				x: 120 + (n % 5) * 240,
+				y: 120 + Math.floor(n / 5) * 240,
 				w: 200,
 				h: 200,
 				text: s.text,
 				color: s.color,
 				drawnBy,
 			})
-			ids.push(id)
+			newIds.push(id)
 		})
+		const resolve = (idx: number): string | undefined => (idx < E ? existingIds[idx] : newIds[idx - E])
 		for (const [a, b] of plan.connectors) {
-			if (ids[a] && ids[b]) {
+			const from = resolve(a)
+			const to = resolve(b)
+			if (from && to && from !== to && shapes.has(from) && shapes.has(to)) {
 				const cid = rid('conn')
-				connectors.set(cid, { id: cid, from: ids[a], to: ids[b] })
+				connectors.set(cid, { id: cid, from, to })
 			}
 		}
 	})
-	console.log(`[agent] applied plan to "${roomName}": ${ids.length} stickies, ${plan.connectors.length} connectors`)
-	return ids
+	console.log(`[agent] +${newIds.length} stickies, +${plan.connectors.length} connectors in "${roomName}"`)
+	return newIds
 }
 
 const app = express()
@@ -251,9 +262,10 @@ app.post('/api/agent/:room', async (req, res) => {
 		return
 	}
 	try {
-		const { plan, provider } = await planBoard(transcript)
-		const ids = applyPlan(req.params.room, plan, 'agent')
-		res.json({ ok: true, provider, stickies: plan.stickies, connectors: plan.connectors, ids })
+		const existing = existingStickies(getRoom(req.params.room))
+		const { plan, provider } = await planBoard(transcript, existing.map((e) => e.text))
+		const ids = applyPlan(req.params.room, plan, 'agent', existing.map((e) => e.id))
+		res.json({ ok: true, provider, added: plan.stickies, connectors: plan.connectors.length, ids })
 	} catch (e) {
 		console.error('[agent] error', e)
 		res.status(500).json({ ok: false, error: (e as Error).message })
@@ -271,8 +283,9 @@ app.post('/api/voice/:room', express.raw({ type: () => true, limit: '25mb' }), a
 			res.json({ ok: true, transcript: '', stickies: 0, note: 'empty transcript' })
 			return
 		}
-		const { plan, provider } = await planBoard(transcript)
-		const ids = applyPlan(req.params.room, plan, 'voice')
+		const existing = existingStickies(getRoom(req.params.room))
+		const { plan, provider } = await planBoard(transcript, existing.map((e) => e.text))
+		const ids = applyPlan(req.params.room, plan, 'voice', existing.map((e) => e.id))
 		res.json({ ok: true, transcript, provider, stickies: ids.length, connectors: plan.connectors.length })
 	} catch (e) {
 		console.error('[voice] error', e)
