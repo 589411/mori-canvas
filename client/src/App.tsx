@@ -134,6 +134,13 @@ function lighten(hex: string, amt = 0.09): string {
 	return `rgb(${r},${g},${b})`
 }
 
+// crisp monochrome line icons (inherit the button's colour, so they theme automatically)
+const Ico = ({ children, size = 17 }: { children: React.ReactNode; size?: number }) => (
+	<svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth={2} strokeLinecap="round" strokeLinejoin="round" style={{ display: 'block' }}>
+		{children}
+	</svg>
+)
+
 // where the center->target line exits a w×h rectangle centred at (cx,cy)
 function edgePoint(cx: number, cy: number, hw: number, hh: number, tx: number, ty: number): [number, number] {
 	const dx = tx - cx
@@ -1318,6 +1325,7 @@ export default function App() {
 								textAlign: 'center',
 								resize: 'none',
 								background: COLORS[s.color] ?? s.color,
+								color: '#1f1c18', // sticky paper is always light -> dark text in both themes
 								zIndex: 2000,
 							}}
 						/>
@@ -1370,16 +1378,16 @@ export default function App() {
 
 			{/* canvas tools (left strip, Photoshop-style) */}
 			<div className="toolstrip float-in">
-				<button className="tool" title="新增一張空白便利貼(也可雙擊白板空白處)" onClick={() => addSticky(140, 140, '', 'yellow') && undefined}><span className="ico">＋</span>便利貼</button>
-				<button className="tool" title="新增一張備註。任何圖表都能貼;自動排列與 AI 都不會動它。" style={{ background: COLORS.note, borderColor: KIND_ACCENT.note }} onClick={() => addNote(180, 180) && undefined}><span className="ico">＋</span>備註</button>
-				<button className="tool" title="手動新增一張圖(AI 也會在切新主題時自動開)" onClick={() => setTypePickerOpen(true)}><span className="ico">⊞</span>新圖{frames.length ? `·${frames.length}` : ''}</button>
+				<button className="tool" title="新增一張空白便利貼(也可雙擊白板空白處)" onClick={() => addSticky(140, 140, '', 'yellow') && undefined}><Ico><path d="M16 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h9l6-6V5a2 2 0 0 0-2-2Z"/><path d="M14 21v-5a1 1 0 0 1 1-1h5"/></Ico>便利貼</button>
+				<button className="tool" title="新增一張備註。任何圖表都能貼;自動排列與 AI 都不會動它。" style={{ background: COLORS.note, borderColor: KIND_ACCENT.note, color: '#4a3a6e' }} onClick={() => addNote(180, 180) && undefined}><Ico><path d="M3 11.5V5a2 2 0 0 1 2-2h6.5a2 2 0 0 1 1.4.6l7.5 7.5a2 2 0 0 1 0 2.8l-6.6 6.6a2 2 0 0 1-2.8 0L3.6 12.9A2 2 0 0 1 3 11.5Z"/><circle cx="7.5" cy="7.5" r="1.1" fill="currentColor" stroke="none"/></Ico>備註</button>
+				<button className="tool" title="手動新增一張圖(AI 也會在切新主題時自動開)" onClick={() => setTypePickerOpen(true)}><Ico><rect x="3" y="3" width="18" height="18" rx="2"/><path d="M12 8v8M8 12h8"/></Ico>新圖{frames.length ? `·${frames.length}` : ''}</button>
 				<div className="tool-divider" />
-				<button className={`tool${connectMode ? ' on' : ''}`} title="開啟後依序點兩張便利貼,畫一條關係箭頭" onClick={() => { setConnectMode((v) => !v); setConnectFrom(null) }}><span className="ico">↘</span>{connectMode ? '點兩張' : '連線'}</button>
-				<button className="tool" title="把每張圖依它的板型重新排整齊" onClick={tidy}><span className="ico">≣</span>排列</button>
+				<button className={`tool${connectMode ? ' on' : ''}`} title="開啟後依序點兩張便利貼,畫一條關係箭頭" onClick={() => { setConnectMode((v) => !v); setConnectFrom(null) }}><Ico><path d="M9 17H7A5 5 0 0 1 7 7h2"/><path d="M15 7h2a5 5 0 0 1 0 10h-2"/><line x1="8" y1="12" x2="16" y2="12"/></Ico>{connectMode ? '點兩張' : '連線'}</button>
+				<button className="tool" title="把每張圖依它的板型重新排整齊" onClick={tidy}><Ico><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></Ico>排列</button>
 				<div className="tool-divider" />
-				<button className="tool" title="復原 Ctrl+Z" onClick={() => undoMgr.undo()}><span className="ico">↶</span>復原</button>
-				<button className="tool" title="重做 Ctrl+Shift+Z" onClick={() => undoMgr.redo()}><span className="ico">↷</span>重做</button>
-				<button className="tool" disabled={!selectedId && !selectedConnId} title="刪除選取的便利貼或連線(Delete)" onClick={() => { if (selectedId) deleteSticky(selectedId); else if (selectedConnId) deleteConnector(selectedConnId) }}><span className="ico">🗑</span>刪除</button>
+				<button className="tool" title="復原 Ctrl+Z" onClick={() => undoMgr.undo()}><Ico><path d="M9 14 4 9l5-5"/><path d="M4 9h11a5 5 0 0 1 5 5 5 5 0 0 1-5 5h-4"/></Ico>復原</button>
+				<button className="tool" title="重做 Ctrl+Shift+Z" onClick={() => undoMgr.redo()}><Ico><path d="m15 14 5-5-5-5"/><path d="M20 9H9a5 5 0 0 0-5 5 5 5 0 0 0 5 5h4"/></Ico>重做</button>
+				<button className="tool" disabled={!selectedId && !selectedConnId} title="刪除選取的便利貼或連線(Delete)" onClick={() => { if (selectedId) deleteSticky(selectedId); else if (selectedConnId) deleteConnector(selectedConnId) }}><Ico><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></Ico>刪除</button>
 			</div>
 
 			{/* app / view (top-right) — settings, theme, export, danger */}
@@ -1400,51 +1408,19 @@ export default function App() {
 					const left = Math.max(8, Math.min(view.x + s.x * view.scale, size.w - 230))
 					const top = Math.max(8, view.y + s.y * view.scale - 48)
 					return (
-						<div
-							className="glass float-in"
-							style={{ position: 'fixed', left, top, zIndex: 1500, display: 'flex', gap: 7, alignItems: 'center', padding: '5px 9px' }}
-						>
-							<span style={{ fontSize: 12, color: 'var(--ink-soft)' }}>改色</span>
-							{KIND_ORDER.map((c) => (
-								<button
-									key={c}
-									title={KIND_LABEL[c]}
-									onClick={() => patchShape(selectedId, { color: c })}
-									style={{
-										width: 22,
-										height: 22,
-										padding: 0,
-										borderRadius: '50%',
-										background: COLORS[c],
-										border: s.color === c ? '2px solid var(--ink)' : '2px solid #fff',
-										boxShadow: '0 1px 3px rgba(28,26,23,0.25)',
-									}}
-								/>
-							))}
-							<button
-								title="用語音輸入這張卡的內容(再按一次停止)"
-								className={cardRecId === selectedId ? 'live' : undefined}
-								style={{
-									padding: '4px 9px',
-									background: cardRecId === selectedId ? 'var(--live)' : undefined,
-									color: cardRecId === selectedId ? '#fff' : undefined,
-									borderColor: cardRecId === selectedId ? 'var(--live)' : undefined,
-								}}
-								onClick={() => dictateCard(selectedId)}
-							>
-								{cardRecId === selectedId ? '■ 停止' : '● 語音'}
-							</button>
-							<button
-								title="刪除這張 (Delete)"
-								style={{ color: 'var(--live)', padding: '4px 9px' }}
-								onClick={() => {
-									deleteSticky(selectedId)
-									setSelectedId(null)
-								}}
-							>
-								刪除
-							</button>
-						</div>
+						<div className="glass float-in" style={{ position: 'fixed', left, top, zIndex: 1500, display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'stretch', padding: '7px 9px', minWidth: 236 }}>
+								<div style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
+									{KIND_ORDER.map((c) => (
+										<button key={c} title={KIND_LABEL[c]} onClick={() => patchShape(selectedId, { color: c })} style={{ width: 22, height: 22, padding: 0, borderRadius: '50%', background: COLORS[c], border: s.color === c ? '2px solid var(--ink)' : '2px solid var(--surface)', boxShadow: '0 1px 3px rgba(28,26,23,0.25)' }} />
+									))}
+									<button title="用語音改這張卡的內容/標籤/負責人(再按一次停止)" className={cardRecId === selectedId ? 'live' : undefined} style={{ padding: '4px 9px', marginLeft: 2, ...(cardRecId === selectedId ? { background: 'var(--live)', color: '#fff', borderColor: 'var(--live)' } : {}) }} onClick={() => dictateCard(selectedId)}>{cardRecId === selectedId ? '■' : '● 語音'}</button>
+									<button title="刪除這張 (Delete)" className="btn-danger" style={{ padding: '4px 9px' }} onClick={() => { deleteSticky(selectedId); setSelectedId(null) }}>刪除</button>
+								</div>
+								<div style={{ display: 'flex', gap: 6 }}>
+									<input placeholder="負責人" value={s.owner || ''} onChange={(e) => patchShape(selectedId, { owner: e.target.value.slice(0, 12) })} style={{ flex: 1, fontSize: 12, padding: '4px 7px' }} />
+									<input placeholder="標籤 空格分隔" value={(s.tags || []).join(' ')} onChange={(e) => patchShape(selectedId, { tags: e.target.value.split(/[\s,]+/).filter(Boolean).slice(0, 3) })} style={{ flex: 1.5, fontSize: 12, padding: '4px 7px' }} />
+								</div>
+							</div>
 					)
 				})()}
 
