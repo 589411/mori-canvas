@@ -212,6 +212,41 @@ pub fn run_command(room: &Room, existing: &[ExistingCard], cmd: &AgentCommand, s
     }
 }
 
+pub fn card_current(room: &Room, id: &str) -> Option<(String, Option<String>, Option<Vec<String>>)> {
+    store::read_map(room, "shapes").into_iter().find(|s| s.get("id").and_then(|v| v.as_str()) == Some(id)).map(|s| {
+        (
+            s.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
+            s.get("owner").and_then(|v| v.as_str()).map(|x| x.to_string()),
+            s.get("tags").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|t| t.as_str().map(|x| x.to_string())).collect()),
+        )
+    })
+}
+
+pub fn apply_card_edit(room: &Room, card_id: &str, edit: &crate::agent::CardEdit) -> bool {
+    let doc = room.awareness.doc();
+    let shapes = doc.get_or_insert_map("shapes");
+    let mut txn = doc.transact_mut();
+    if let Some(cur) = shapes.get(&txn, card_id) {
+        let mut v = any_to_json(&cur.to_json(&txn));
+        if let Some(t) = &edit.text {
+            v["text"] = json!(t);
+        }
+        if let Some(t) = &edit.tags {
+            v["tags"] = json!(t);
+        }
+        if let Some(o) = &edit.owner {
+            v["owner"] = json!(o);
+        }
+        if let Some(c) = &edit.color {
+            v["color"] = json!(c);
+        }
+        shapes.insert(&mut txn, card_id.to_string(), json_to_any(&v));
+        true
+    } else {
+        false
+    }
+}
+
 pub async fn run_agent_turn(room: &Room, transcript: &str, by: &str, local_only: bool, auto_tidy: bool, spacing: f64) -> Result<Value, String> {
     let (mtype, topic) = store::read_meta(room);
     let existing = existing_stickies(room);

@@ -4,14 +4,30 @@ mod board_types;
 mod layout;
 mod llm;
 mod store;
+mod stt;
 mod sync;
 mod yval;
 
 use once_cell::sync::Lazy;
 use serde_json::{json, Value};
+use std::collections::HashMap;
 use std::sync::Arc;
 use tokio::sync::Mutex;
 use warp::Filter;
+
+fn sanitize_ext(s: &str) -> String {
+    let e: String = s.chars().filter(|c| c.is_ascii_alphanumeric()).collect();
+    if e.is_empty() {
+        "webm".into()
+    } else {
+        e
+    }
+}
+async fn write_tmp(prefix: &str, ext: &str, body: &[u8]) -> String {
+    let p = std::env::temp_dir().join(format!("{}-{}.{}", prefix, store::rid(), ext));
+    let _ = tokio::fs::write(&p, body).await;
+    p.to_string_lossy().to_string()
+}
 
 #[derive(Clone, serde::Serialize)]
 struct Settings {
@@ -230,7 +246,15 @@ async fn main() {
     // GET/POST /api/settings
     let settings_get = warp::get().and(warp::path!("api" / "settings")).and_then(|| async move {
         let s = SETTINGS.lock().await.clone();
-        Ok::<_, warp::Rejection>(warp::reply::json(&json!({ "ok": true, "spacing": s.spacing, "autoTidy": s.auto_tidy, "mode": s.mode, "sttSource": s.stt_source, "localOnly": s.local_only, "whisperUrl": s.whisper_url })))
+        let mut o = json!({ "ok": true, "spacing": s.spacing, "autoTidy": s.auto_tidy, "mode": s.mode, "sttSource": s.stt_source, "localOnly": s.local_only, "whisperUrl": s.whisper_url, "groqKey": llm::groq_key().is_some() });
+        for src in [llm::config_info(), stt::stt_capabilities()] {
+            if let (Value::Object(dst), Value::Object(m)) = (&mut o, src) {
+                for (k, v) in m {
+                    dst.insert(k, v);
+                }
+            }
+        }
+        Ok::<_, warp::Rejection>(warp::reply::json(&o))
     });
     let settings_post = warp::post().and(warp::path!("api" / "settings")).and(warp::body::json()).and_then(|body: Value| async move {
         let mut s = SETTINGS.lock().await;
@@ -277,7 +301,92 @@ async fn main() {
         })
     });
 
+    // POST /api/transcribe — audio -> text (no agent)
+    let transcribe_ep = warp::post().and(warp::path!("api" / "transcribe")).and(warp::query::<HashMap<String, String>>()).and(warp::body::bytes()).and_then(|q: HashMap<String, String>, body: bytes::Bytes| async move {
+        let ext = sanitize_ext(q.get("ext").map(|s| s.as_str()).unwrap_or("webm"));
+        let tmp = write_tmp("t", &ext, &body).await;
+        let s = SETTINGS.lock().await.clone();
+        let r = stt::transcribe(&tmp, &s.mode, &s.stt_source, &s.whisper_url).await;
+        let _ = tokio::fs::remove_file(&tmp).await;
+        Ok::<_, warp::Rejection>(match r {
+            Ok(text) => warp::reply::json(&json!({ "ok": true, "text": text })),
+            Err(e) => warp::reply::json(&json!({ "ok": false, "error": e })),
+        })
+    });
+
+    // POST /api/voice/:room — audio -> STT -> agent turn
+    let r_voice = rooms.clone();
+    let voice_ep = warp::post().and(warp::path!("api" / "voice" / String)).and(warp::query::<HashMap<String, String>>()).and(warp::body::bytes()).and(with(r_voice)).and_then(
+        |name: String, q: HashMap<String, String>, body: bytes::Bytes, rooms: sync::Rooms| async move {
+            let ext = sanitize_ext(q.get("ext").map(|s| s.as_str()).unwrap_or("webm"));
+            let tmp = write_tmp("voice", &ext, &body).await;
+            let s = SETTINGS.lock().await.clone();
+            let transcript = stt::transcribe(&tmp, &s.mode, &s.stt_source, &s.whisper_url).await;
+            let _ = tokio::fs::remove_file(&tmp).await;
+            let transcript = match transcript {
+                Ok(t) => t,
+                Err(e) => return Ok::<_, warp::Rejection>(warp::reply::json(&json!({ "ok": false, "error": e }))),
+            };
+            if transcript.trim().is_empty() {
+                return Ok(warp::reply::json(&json!({ "ok": true, "transcript": "", "stickies": 0 })));
+            }
+            let by: String = q.get("by").map(|s| s.as_str()).unwrap_or("voice").chars().take(24).collect();
+            let room = sync::get_or_create_room(&rooms, &name).await;
+            let _guard = AGENT_LOCK.lock().await;
+            let mut res = match apply::run_agent_turn(&room, &transcript, &by, s.local_only, s.auto_tidy, s.spacing).await {
+                Ok(v) => v,
+                Err(e) => json!({ "ok": false, "error": e }),
+            };
+            res["transcript"] = json!(transcript);
+            Ok(warp::reply::json(&res))
+        },
+    );
+
+    // POST /api/card/:room/:cardId — dictate one card's text/tags/owner/kind
+    let r_card = rooms.clone();
+    let card_ep = warp::post().and(warp::path!("api" / "card" / String / String)).and(warp::query::<HashMap<String, String>>()).and(warp::body::bytes()).and(with(r_card)).and_then(
+        |name: String, card_id: String, q: HashMap<String, String>, body: bytes::Bytes, rooms: sync::Rooms| async move {
+            let ext = sanitize_ext(q.get("ext").map(|s| s.as_str()).unwrap_or("webm"));
+            let tmp = write_tmp("c", &ext, &body).await;
+            let s = SETTINGS.lock().await.clone();
+            let transcript = stt::transcribe(&tmp, &s.mode, &s.stt_source, &s.whisper_url).await.unwrap_or_default();
+            let _ = tokio::fs::remove_file(&tmp).await;
+            let room = sync::get_or_create_room(&rooms, &name).await;
+            let cur = apply::card_current(&room, &card_id);
+            if cur.is_none() {
+                return Ok::<_, warp::Rejection>(warp::reply::json(&json!({ "ok": false, "error": "card not found", "transcript": transcript })));
+            }
+            if transcript.trim().is_empty() {
+                return Ok(warp::reply::json(&json!({ "ok": true, "transcript": "", "edit": {} })));
+            }
+            let (text, owner, tags) = cur.unwrap();
+            let _guard = AGENT_LOCK.lock().await;
+            let edit = match agent::plan_card_edit(&transcript, &text, owner.as_deref(), tags.as_deref(), s.local_only).await {
+                Ok(e) => e,
+                Err(e) => return Ok(warp::reply::json(&json!({ "ok": false, "error": e, "transcript": transcript }))),
+            };
+            apply::apply_card_edit(&room, &card_id, &edit);
+            let mut ej = serde_json::Map::new();
+            if let Some(t) = &edit.text {
+                ej.insert("text".into(), json!(t));
+            }
+            if let Some(t) = &edit.tags {
+                ej.insert("tags".into(), json!(t));
+            }
+            if let Some(o) = &edit.owner {
+                ej.insert("owner".into(), json!(o));
+            }
+            if let Some(c) = &edit.color {
+                ej.insert("color".into(), json!(c));
+            }
+            Ok(warp::reply::json(&json!({ "ok": true, "transcript": transcript, "edit": ej })))
+        },
+    );
+
     let api = agent_ep
+        .or(transcribe_ep)
+        .or(voice_ep)
+        .or(card_ep)
         .or(health)
         .or(lan)
         .or(rooms_list)
@@ -292,7 +401,11 @@ async fn main() {
         .or(settings_post);
 
     let cors = warp::cors().allow_any_origin().allow_methods(vec!["GET", "POST", "OPTIONS"]).allow_headers(vec!["Content-Type"]);
-    let routes = api.or(ws).with(cors);
+    // serve the built client (single standalone binary: client + sync + api on one port)
+    let client_dir = std::env::var("CLIENT_DIR").unwrap_or_else(|_| "client/dist".into());
+    let static_files = warp::get().and(warp::fs::dir(client_dir.clone()));
+    let index_fallback = warp::get().and(warp::fs::file(format!("{}/index.html", client_dir)));
+    let routes = api.or(ws).or(static_files).or(index_fallback).with(cors);
 
     let port: u16 = std::env::var("PORT").ok().and_then(|p| p.parse().ok()).unwrap_or(1334);
     println!("mori-canvas-server (Rust) on http://127.0.0.1:{port}");
