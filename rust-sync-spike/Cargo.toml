@@ -1,0 +1,11 @@
+[package]
+name = "rust-sync-spike"
+version = "0.0.0"
+edition = "2021"
+
+[dependencies]
+tokio = { version = "1", features = ["full"] }
+warp = "0.3"
+futures-util = "0.3"
+yrs = "0.24"
+yrs-warp = "0.9"
