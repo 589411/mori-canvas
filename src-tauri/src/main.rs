@@ -49,6 +49,8 @@ fn main() {
         std::thread::sleep(Duration::from_millis(50));
     }
     register_body_part();
+    // AgentOS 服務發現:寫 ~/.mori/mori-canvas-server.json,讓 agentos dispatch meeting.visualize → /api/visualize。
+    mori_canvas_server::write_agentos_descriptor(PORT);
 
     tauri::Builder::default()
         .run(tauri::generate_context!())

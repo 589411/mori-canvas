@@ -3,7 +3,7 @@
   "id": "mori.canvas",
   "name": "Mori Canvas",
   "kind": "body-part",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "realm_mode": "personal",
   "capabilities": ["whiteboard.collaborate", "meeting.visualize"],
   "permissions": [],
@@ -18,8 +18,31 @@
   "provides": [
     {
       "skill": "meeting.visualize",
-      "kind": "external",
-      "exportable": true
+      "kind": "http-service",
+      "exportable": true,
+      "http_service": {
+        "descriptor_path": "~/.mori/mori-canvas-server.json",
+        "mode": "json"
+      },
+      "description": "把一段會議逐字稿整理成白板(便利貼+連線+多種圖),回傳 markdown 匯出 + 一頁摘要 + 一個可打開繼續編輯的 url。",
+      "input_schema": {
+        "type": "object",
+        "properties": {
+          "transcript": {
+            "type": "string",
+            "description": "要整理成白板的會議逐字稿(整段純文字)"
+          },
+          "room": {
+            "type": "string",
+            "description": "選填;白板 room 名稱,省略自動產生;同名會累加進既有白板"
+          },
+          "board_type": {
+            "type": "string",
+            "description": "選填;初始板型(meeting/orgchart/flow/architecture/mindmap/kanban/swot/timeline/fishbone/gantt)"
+          }
+        },
+        "required": ["transcript"]
+      }
     }
   ]
 }

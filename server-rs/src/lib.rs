@@ -78,6 +78,33 @@ fn maybe_register_body_part(port: u16) {
     if std::fs::write(format!("{}/manifest.json", dir), serde_json::to_string_pretty(&manifest).unwrap()).is_ok() {
         println!("registered mori-desktop body part: {}/manifest.json", dir);
     }
+    write_agentos_descriptor(port);
+}
+
+/// AgentOS 服務發現檔 `~/.mori/mori-canvas-server.json` —— 讓 AgentOS 在 dispatch `meeting.visualize`
+/// (http-service / json 模式)時用 `forward_json` 找到本機 server、POST 到 `/api/visualize`。
+/// 格式對齊 whisper-server 契約(AgentOS 的 descriptor 解析器只認 host/port/inference_path/contract_version);
+/// 與 whisper-server.json / mori-recorder-server.json 並存不衝突。**呼叫端決定要不要寫**(standalone 路徑
+/// 由 `MORI_CANVAS_REGISTER=1` gate;桌面 app 啟動即寫)。
+pub fn write_agentos_descriptor(port: u16) {
+    let home = std::env::var("HOME").unwrap_or_default();
+    if home.is_empty() {
+        return;
+    }
+    let dir = format!("{}/.mori", home);
+    if std::fs::create_dir_all(&dir).is_err() {
+        return;
+    }
+    let desc = json!({
+        "contract_version": 1,
+        "host": "127.0.0.1",
+        "port": port,
+        "pid": std::process::id(),
+        "inference_path": "/api/visualize"
+    });
+    if std::fs::write(format!("{}/mori-canvas-server.json", dir), serde_json::to_string_pretty(&desc).unwrap()).is_ok() {
+        println!("wrote AgentOS descriptor: {}/mori-canvas-server.json (port {})", dir, port);
+    }
 }
 
 #[derive(Clone, serde::Serialize)]
@@ -297,6 +324,31 @@ async fn summary_markdown(room: &sync::Room, name: &str, local_only: bool, llm: 
 static ROOM_LOCKS: Lazy<Mutex<HashMap<String, Arc<Mutex<()>>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
 async fn room_lock(name: &str) -> Arc<Mutex<()>> {
     ROOM_LOCKS.lock().await.entry(name.to_string()).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
+}
+
+/// 把整段逐字稿切成適合餵 agent 的塊:先按換行 / 句末標點切小單位,再併到約 200 字一塊,
+/// 壓低 LLM 呼叫數(agent 每次只處理「一段」、最多 6 張卡,整段硬塞會被截掉)。
+fn chunk_transcript(t: &str) -> Vec<String> {
+    const MAX: usize = 200;
+    let mut chunks: Vec<String> = Vec::new();
+    let mut cur = String::new();
+    for unit in t
+        .split(['\n', '。', '!', '?', '!', '?', ';', ';'])
+        .map(|s| s.trim())
+        .filter(|s| !s.is_empty())
+    {
+        if !cur.is_empty() && cur.chars().count() + unit.chars().count() > MAX {
+            chunks.push(std::mem::take(&mut cur));
+        }
+        if !cur.is_empty() {
+            cur.push('。');
+        }
+        cur.push_str(unit);
+    }
+    if !cur.trim().is_empty() {
+        chunks.push(cur);
+    }
+    chunks
 }
 
 pub async fn serve(port: u16) {
@@ -557,7 +609,67 @@ pub async fn serve(port: u16) {
         },
     );
 
+    // POST /api/visualize — headless「整段逐字稿 → 建板 → 匯出」。AgentOS dispatch meeting.visualize 走這支:
+    // 切塊逐塊餵 agent 建板 → tidy → 回 markdown / summary + 一個能打開**繼續編輯**的 url(room 持久化;
+    // html/png 匯出走 client)。body: { transcript(必), room?, board_type? }。
+    let r_viz = rooms.clone();
+    let visualize_ep = warp::post()
+        .and(warp::path!("api" / "visualize"))
+        .and(warp::body::json())
+        .and(with(r_viz))
+        .and(warp::header::optional::<String>("x-forwarded-for"))
+        .and(llm_opts())
+        .and_then(move |body: Value, rooms: sync::Rooms, xff: Option<String>, llm: llm::LlmOpts| async move {
+            if !rate_ok(&client_ip(&xff)).await {
+                return Ok::<_, warp::Rejection>(warp::reply::json(&json!({ "ok": false, "error": "太頻繁了,休息一下再試" })));
+            }
+            let transcript = body.get("transcript").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            if transcript.is_empty() {
+                return Ok::<_, warp::Rejection>(warp::reply::json(&json!({ "ok": false, "error": "transcript required" })));
+            }
+            let name = body
+                .get("room")
+                .and_then(|v| v.as_str())
+                .map(|s| s.trim())
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .unwrap_or_else(|| format!("visualize-{}", store::rid()));
+            let room = sync::get_or_create_room(&rooms, &name).await;
+            if let Some(bt) = body.get("board_type").and_then(|v| v.as_str()) {
+                store::set_meta(&room, Some(bt), None);
+            }
+            let s = SETTINGS.lock().await.clone();
+            let _lk = room_lock(&name).await;
+            let _guard = _lk.lock().await; // serialize per-room
+            let chunks = chunk_transcript(&transcript);
+            let total = chunks.len();
+            let mut turns = 0usize;
+            for c in &chunks {
+                // auto_tidy=false:逐塊建板別每塊都重排,最後統一 tidy 一次。
+                if apply::run_agent_turn(&room, c, "AI", s.local_only, false, s.spacing, &llm).await.is_ok() {
+                    turns += 1;
+                }
+            }
+            apply::tidy_board(&room, s.spacing);
+            let markdown = export_markdown(&room);
+            let summary = summary_markdown(&room, &name, s.local_only, &llm).await;
+            let cards = store::read_map(&room, "shapes").iter().filter(|x| x.get("type").and_then(|v| v.as_str()) == Some("sticky")).count();
+            let frames = store::frames_sorted(&room).len();
+            Ok(warp::reply::json(&json!({
+                "ok": true,
+                "room": name,
+                "url": format!("http://127.0.0.1:{}/?room={}", port, name),
+                "chunks": total,
+                "turns": turns,
+                "cards": cards,
+                "frames": frames,
+                "markdown": markdown,
+                "summary": summary
+            })))
+        });
+
     let api = agent_ep
+        .or(visualize_ep)
         .or(transcribe_ep)
         .or(voice_ep)
         .or(card_ep)

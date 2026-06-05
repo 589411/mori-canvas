@@ -168,9 +168,15 @@ CLI / API(server 內部在 :1234,client 經 Vite 同源代理 `/api`、`/sync`):
 ```bash
 npm run bot -- "外部寫的" meet blue                 # 外部 yjs peer 直接寫一張
 curl -X POST localhost:1234/api/agent/meet -H 'Content-Type: application/json' \
-  -d '{"transcript":"今天開會討論…"}'                # 逐字稿 → 板
+  -d '{"transcript":"今天開會討論…"}'                # 逐字稿 → 板(一句一句)
 curl localhost:1234/api/export/meet                  # 匯出 markdown
+curl -X POST localhost:1234/api/visualize -H 'Content-Type: application/json' \
+  -d '{"transcript":"整場逐字稿…"}'                  # 一次到位:整段逐字稿 → 建板 → 回 markdown/summary + 可繼續編輯的 url
 ```
+
+> **AgentOS dispatch(選用)**:`/api/visualize` 同時是 `meeting.visualize` skill 的 http-service endpoint。
+> server 啟動(桌面版,或 `MORI_CANVAS_REGISTER=1`)會寫 `~/.mori/mori-canvas-server.json`,讓 AgentOS
+> `agentos run` 時把「傳一段會議逐字稿 → 產出白板 + 匯出」dispatch 進來。Standalone 行為不受影響。
 
 ---
 
