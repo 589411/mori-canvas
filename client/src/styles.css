@@ -190,7 +190,11 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 }
 
 @media (max-width: 700px) {
-  button, .btn { padding: 10px 13px; font-size: 14px; min-height: 44px; }   /* >= 44px touch target */
+  button, .btn { font-size: 14px; }
+  /* 44px touch target on the real action buttons ONLY — never on tiny fixed-size buttons
+     like the round colour swatches, which set width/height/padding inline (a blanket
+     min-height stretched them into ovals). */
+  .btn-rec, .btn-accent, .btn-soft, .btn-primary, .btn-danger, .btn-on { min-height: 44px; padding: 11px 14px; }
   /* iOS zooms the page when focusing an input < 16px — force 16px on touch */
   input, textarea, select { font-size: 16px !important; }
   /* tools become a compact icon-only row under the top bar, horizontally scrollable —
