@@ -1,0 +1,63 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630">
+  <defs>
+    <pattern id="dots" width="28" height="28" patternUnits="userSpaceOnUse">
+      <circle cx="2" cy="2" r="1.5" fill="#e2dbcc"/>
+    </pattern>
+    <style>
+      .h { font-family: 'Noto Sans TC'; font-weight: 900; }
+      .b { font-family: 'Noto Sans TC'; font-weight: 700; }
+      .m { font-family: 'Noto Sans TC'; font-weight: 500; }
+      .note { font-family: 'Noto Sans TC'; font-weight: 700; }
+    </style>
+  </defs>
+
+  <rect width="1200" height="630" fill="#faf7f1"/>
+  <rect width="1200" height="630" fill="url(#dots)" opacity="0.7"/>
+
+  <!-- left: title block -->
+  <text x="82" y="244" class="h" font-size="86" fill="#1c1a17">Mori Canvas</text>
+  <text x="86" y="330" class="h" font-size="56" fill="#b4530a">共筆白板</text>
+  <rect x="88" y="356" width="118" height="6" rx="3" fill="#b4530a"/>
+  <text x="86" y="430" class="m" font-size="35" fill="#33302a">開會講話 → AI 幫你畫白板</text>
+  <text x="86" y="482" class="m" font-size="24" fill="#6b655c">語音 → 便利貼 + 關係圖 · 多人即時協作 · 全 MIT</text>
+
+  <!-- right: a mini board (one topic branches to decision / todo / risk) -->
+  <!-- connectors -->
+  <g stroke="#9a9286" stroke-width="3" fill="none">
+    <path d="M932 232 L932 300 M770 300 L1066 300 M770 300 L770 348 M932 300 L932 348 M1066 300 L1066 348"/>
+  </g>
+
+  <!-- top note (yellow = 主題) -->
+  <rect x="838" y="338" width="0" height="0"/>
+  <g>
+    <rect x="832" y="124" width="200" height="108" rx="18" fill="#16130f" opacity="0.10" transform="translate(0,6)"/>
+    <rect x="832" y="124" width="200" height="108" rx="18" fill="#f7e3a6" stroke="#e7cf86" stroke-width="1.5"/>
+    <circle cx="856" cy="150" r="6" fill="#c8a23a"/>
+    <text x="932" y="200" class="note" font-size="30" fill="#3a3220" text-anchor="middle">今天開會</text>
+  </g>
+
+  <!-- green = 待辦 -->
+  <g>
+    <rect x="704" y="348" width="132" height="100" rx="16" fill="#16130f" opacity="0.10" transform="translate(0,6)"/>
+    <rect x="704" y="348" width="132" height="100" rx="16" fill="#c4e3bc" stroke="#a7d29c" stroke-width="1.5"/>
+    <circle cx="726" cy="372" r="5.5" fill="#5a9e52"/>
+    <text x="770" y="408" class="note" font-size="25" fill="#274a23" text-anchor="middle">待辦</text>
+  </g>
+  <!-- blue = 決議 -->
+  <g>
+    <rect x="866" y="348" width="132" height="100" rx="16" fill="#16130f" opacity="0.10" transform="translate(0,6)"/>
+    <rect x="866" y="348" width="132" height="100" rx="16" fill="#bdd6f1" stroke="#9bbfe6" stroke-width="1.5"/>
+    <circle cx="888" cy="372" r="5.5" fill="#3f76c0"/>
+    <text x="932" y="408" class="note" font-size="25" fill="#1f3d68" text-anchor="middle">決議</text>
+  </g>
+  <!-- red = 風險 -->
+  <g>
+    <rect x="1000" y="348" width="132" height="100" rx="16" fill="#16130f" opacity="0.10" transform="translate(0,6)"/>
+    <rect x="1000" y="348" width="132" height="100" rx="16" fill="#f3c8be" stroke="#e6a99c" stroke-width="1.5"/>
+    <circle cx="1022" cy="372" r="5.5" fill="#c75a45"/>
+    <text x="1066" y="408" class="note" font-size="25" fill="#6e2c1f" text-anchor="middle">風險</text>
+  </g>
+
+  <!-- footer url -->
+  <text x="86" y="556" class="b" font-size="22" fill="#b4530a">mori-canvas.onrender.com</text>
+</svg>
