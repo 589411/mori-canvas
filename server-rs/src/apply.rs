@@ -71,79 +71,109 @@ fn sticky_json(id: &str, s: &StickyPlan, x: f64, y: f64, drawn_by: &str, frame_i
 }
 
 /// returns (new_ids, connectors_drawn)
-pub fn apply_plan(room: &Room, plan: &BoardPlan, drawn_by: &str, existing_ids: &[String], frame_id: Option<&str>) -> (Vec<String>, usize) {
-    let doc = room.awareness.doc();
-    let shapes = doc.get_or_insert_map("shapes");
-    let connectors = doc.get_or_insert_map("connectors");
-    let mut new_ids = vec![];
-    let mut drawn = 0usize;
-    let e = existing_ids.len();
-    let mut txn = doc.transact_mut();
+/// publish (or clear) "Mori"'s live cursor on a room via awareness, so every client sees it
+fn set_mori_cursor(room: &Room, cursor: Option<(f64, f64)>) {
+    match cursor {
+        Some((x, y)) => {
+            let _ = room.awareness.set_local_state(json!({ "user": { "name": "Mori", "color": "#7c3aed" }, "cursor": { "x": x, "y": y } }));
+        }
+        None => room.awareness.clean_local_state(),
+    }
+}
 
-    // updates
-    for u in &plan.updates {
-        if let Some(id) = existing_ids.get(u.index) {
-            if let Some(cur) = shapes.get(&txn, id) {
-                let mut v = any_to_json(&cur.to_json(&txn));
-                if let Some(t) = &u.text {
-                    v["text"] = json!(t);
-                }
-                if let Some(c) = &u.color {
-                    v["color"] = json!(c);
-                }
-                shapes.insert(&mut txn, id.clone(), json_to_any(&v));
-            }
-        }
-    }
-    // deletes (+ their connectors)
-    for idx in &plan.deletes {
-        if let Some(id) = existing_ids.get(*idx) {
-            if shapes.get(&txn, id).is_some() {
-                shapes.remove(&mut txn, id);
-                let conn_keys: Vec<String> = connectors
-                    .iter(&txn)
-                    .filter_map(|(k, v)| {
-                        let j = any_to_json(&v.to_json(&txn));
-                        if j.get("from").and_then(|x| x.as_str()) == Some(id.as_str()) || j.get("to").and_then(|x| x.as_str()) == Some(id.as_str()) {
-                            Some(k.to_string())
-                        } else {
-                            None
-                        }
-                    })
-                    .collect();
-                for k in conn_keys {
-                    connectors.remove(&mut txn, &k);
+/// Stream new stickies one-by-one with Mori's live cursor moving to each (the "Mori draws"
+/// effect), like the Node version. Each phase is its own transaction so no txn is held
+/// across an await. Returns (new_ids, connectors_drawn).
+pub async fn apply_plan(room: &Room, plan: &BoardPlan, drawn_by: &str, existing_ids: &[String], frame_id: Option<&str>) -> (Vec<String>, usize) {
+    let e = existing_ids.len();
+
+    // 1) updates + deletes (one transaction)
+    {
+        let doc = room.awareness.doc();
+        let shapes = doc.get_or_insert_map("shapes");
+        let connectors = doc.get_or_insert_map("connectors");
+        let mut txn = doc.transact_mut();
+        for u in &plan.updates {
+            if let Some(id) = existing_ids.get(u.index) {
+                if let Some(cur) = shapes.get(&txn, id) {
+                    let mut v = any_to_json(&cur.to_json(&txn));
+                    if let Some(t) = &u.text {
+                        v["text"] = json!(t);
+                    }
+                    if let Some(c) = &u.color {
+                        v["color"] = json!(c);
+                    }
+                    shapes.insert(&mut txn, id.clone(), json_to_any(&v));
                 }
             }
         }
+        for idx in &plan.deletes {
+            if let Some(id) = existing_ids.get(*idx) {
+                if shapes.get(&txn, id).is_some() {
+                    shapes.remove(&mut txn, id);
+                    let conn_keys: Vec<String> = connectors
+                        .iter(&txn)
+                        .filter_map(|(k, v)| {
+                            let j = any_to_json(&v.to_json(&txn));
+                            if j.get("from").and_then(|x| x.as_str()) == Some(id.as_str()) || j.get("to").and_then(|x| x.as_str()) == Some(id.as_str()) {
+                                Some(k.to_string())
+                            } else {
+                                None
+                            }
+                        })
+                        .collect();
+                    for k in conn_keys {
+                        connectors.remove(&mut txn, &k);
+                    }
+                }
+            }
+        }
     }
-    // new stickies (temp grid by colour column; tidy fixes positions afterwards)
+
+    // 2) stream new stickies — cursor to each, sleep, write (each its own txn)
+    let mut new_ids = vec![];
     for (i, s) in plan.stickies.iter().enumerate() {
         let id = format!("sticky-{}", rid());
         let col = column_of(&s.color);
         let x = 120.0 + col as f64 * 240.0;
         let y = 120.0 + i as f64 * 60.0;
-        shapes.insert(&mut txn, id.clone(), json_to_any(&sticky_json(&id, s, x, y, drawn_by, frame_id)));
+        set_mori_cursor(room, Some((x + 100.0, y + 100.0)));
+        tokio::time::sleep(std::time::Duration::from_millis(240)).await;
+        {
+            let doc = room.awareness.doc();
+            let shapes = doc.get_or_insert_map("shapes");
+            let mut txn = doc.transact_mut();
+            shapes.insert(&mut txn, id.clone(), json_to_any(&sticky_json(&id, s, x, y, drawn_by, frame_id)));
+        }
         new_ids.push(id);
     }
-    // connectors (unified index space)
-    let resolve = |idx: i64| -> Option<String> {
-        let idx = idx as usize;
-        if idx < e {
-            existing_ids.get(idx).cloned()
-        } else {
-            new_ids.get(idx - e).cloned()
-        }
-    };
-    for (a, b) in &plan.connectors {
-        if let (Some(from), Some(to)) = (resolve(*a), resolve(*b)) {
-            if from != to && shapes.get(&txn, &from).is_some() && shapes.get(&txn, &to).is_some() {
-                let cid = format!("conn-{}", rid());
-                connectors.insert(&mut txn, cid.clone(), json_to_any(&json!({ "id": cid, "from": from, "to": to })));
-                drawn += 1;
+
+    // 3) connectors (one transaction, unified index space)
+    let mut drawn = 0usize;
+    {
+        let doc = room.awareness.doc();
+        let shapes = doc.get_or_insert_map("shapes");
+        let connectors = doc.get_or_insert_map("connectors");
+        let mut txn = doc.transact_mut();
+        let resolve = |idx: i64| -> Option<String> {
+            let idx = idx as usize;
+            if idx < e {
+                existing_ids.get(idx).cloned()
+            } else {
+                new_ids.get(idx - e).cloned()
+            }
+        };
+        for (a, b) in &plan.connectors {
+            if let (Some(from), Some(to)) = (resolve(*a), resolve(*b)) {
+                if from != to && shapes.get(&txn, &from).is_some() && shapes.get(&txn, &to).is_some() {
+                    let cid = format!("conn-{}", rid());
+                    connectors.insert(&mut txn, cid.clone(), json_to_any(&json!({ "id": cid, "from": from, "to": to })));
+                    drawn += 1;
+                }
             }
         }
     }
+    set_mori_cursor(room, None);
     (new_ids, drawn)
 }
 
@@ -279,7 +309,7 @@ pub async fn run_agent_turn(room: &Room, transcript: &str, by: &str, local_only:
             };
             let existing_ids: Vec<String> = existing.iter().map(|c| c.id.clone()).collect();
             let added: Vec<Value> = plan.stickies.iter().map(|s| json!({ "text": s.text, "color": s.color })).collect();
-            let (ids, drawn) = apply_plan(room, &plan, by, &existing_ids, Some(&frame_id));
+            let (ids, drawn) = apply_plan(room, &plan, by, &existing_ids, Some(&frame_id)).await;
             if auto_tidy && (!ids.is_empty() || drawn > 0) {
                 tidy_board(room, spacing);
             }
