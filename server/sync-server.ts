@@ -23,7 +23,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from '
 import { createHash } from 'node:crypto'
 import { tmpdir, networkInterfaces } from 'node:os'
 import { join as pathJoin } from 'node:path'
-import { planBoard, type BoardPlan } from './agent.ts'
+import { planAgent, type BoardPlan, type ExistingCard, type AgentCommand } from './agent.ts'
 import { transcribe } from './stt.ts'
 import { chat } from './llm.ts'
 
@@ -261,11 +261,45 @@ function setMoriCursor(room: Room, cursor: { x: number; y: number } | null) {
 }
 
 /** Existing stickies in a STABLE order (by id) — the same order fed to the agent. */
-function existingStickies(room: Room): { id: string; text: string }[] {
+function existingStickies(room: Room): ExistingCard[] {
 	return [...room.doc.getMap('shapes').values()]
 		.filter((s: any) => s.type === 'sticky')
 		.sort((a: any, b: any) => (a.id < b.id ? -1 : 1))
-		.map((s: any) => ({ id: s.id, text: s.text }))
+		.map((s: any) => ({ id: s.id, text: s.text, color: s.color, owner: s.owner, tags: s.tags }))
+}
+
+const COLOR_BY_KIND: Record<string, string> = { topic: 'yellow', todo: 'green', decision: 'blue', risk: 'red' }
+
+/**
+ * Run a recognised voice command. Board mutations (tidy/assign/recolor) happen
+ * here and sync to everyone; view commands (filter/clearFilter) are returned so
+ * the client that spoke them can apply them locally. Returns a human label + an
+ * optional view command for the client.
+ */
+function runCommand(room: Room, existing: ExistingCard[], cmd: AgentCommand): { label: string; view?: any } {
+	const shapes = room.doc.getMap('shapes')
+	switch (cmd.action) {
+		case 'tidy':
+			tidyBoard(room)
+			return { label: '自動排列' }
+		case 'filter':
+			return { label: `只看 ${cmd.by === 'tag' ? '#' + cmd.value : cmd.value}`, view: { action: 'filter', by: cmd.by, value: cmd.value } }
+		case 'clearFilter':
+			return { label: '顯示全部', view: { action: 'clearFilter' } }
+		case 'assign': {
+			const id = existing[cmd.index]?.id
+			const cur = id ? (shapes.get(id) as any) : undefined
+			if (cur) room.doc.transact(() => shapes.set(id, { ...cur, owner: cmd.owner }))
+			return { label: cur ? `指派「${cur.text}」給 ${cmd.owner}` : '指派失敗' }
+		}
+		case 'recolor': {
+			const id = existing[cmd.index]?.id
+			const cur = id ? (shapes.get(id) as any) : undefined
+			const color = COLOR_BY_KIND[cmd.kind]
+			if (cur && color) room.doc.transact(() => shapes.set(id, { ...cur, color }))
+			return { label: cur ? `「${cur.text}」改為${KIND_BY_COLOR[color] ?? cmd.kind}` : '改色失敗' }
+		}
+	}
 }
 
 /**
@@ -426,6 +460,22 @@ app.post('/api/bot/:room/sticky', (req, res) => {
 
 // Agent: transcript -> board plan (Groq->Ollama) -> stickies + connectors.
 // Wrapped in a per-room lock so concurrent runs queue instead of racing.
+// One agent turn: classify intent, then either run the command or apply content.
+async function runAgentTurn(roomName: string, transcript: string, by: string): Promise<any> {
+	return withRoomLock(roomName, async () => {
+		const room = getRoom(roomName)
+		const existing = existingStickies(room)
+		const { result, provider } = await planAgent(transcript, existing)
+		if (result.intent === 'command') {
+			const done = runCommand(room, existing, result.command)
+			console.log(`[agent] command in "${roomName}": ${done.label}`)
+			return { provider, intent: 'command', command: done.view ?? null, commandLabel: done.label, added: [], stickies: 0, connectors: 0 }
+		}
+		const r = await applyPlan(roomName, result.plan, by, existing.map((e) => e.id))
+		return { provider, intent: 'content', added: result.plan.stickies, ids: r.ids, stickies: r.ids.length, connectors: r.connectorsDrawn }
+	})
+}
+
 app.post('/api/agent/:room', rateLimit, async (req, res) => {
 	const transcript = String(req.body?.transcript ?? '').trim()
 	if (!transcript) {
@@ -434,12 +484,7 @@ app.post('/api/agent/:room', rateLimit, async (req, res) => {
 	}
 	try {
 		const by = (String(req.body?.by ?? '').trim() || 'agent').slice(0, 24)
-		const out = await withRoomLock(req.params.room, async () => {
-			const existing = existingStickies(getRoom(req.params.room))
-			const { plan, provider } = await planBoard(transcript, existing.map((e) => e.text))
-			const r = await applyPlan(req.params.room, plan, by, existing.map((e) => e.id))
-			return { provider, added: plan.stickies, connectors: r.connectorsDrawn, ids: r.ids }
-		})
+		const out = await runAgentTurn(req.params.room, transcript, by)
 		res.json({ ok: true, ...out })
 	} catch (e) {
 		console.error('[agent] error', e)
@@ -459,12 +504,7 @@ app.post('/api/voice/:room', rateLimit, express.raw({ type: () => true, limit: '
 			return
 		}
 		const by = (String(req.query.by ?? '').trim() || 'voice').slice(0, 24)
-		const out = await withRoomLock(req.params.room, async () => {
-			const existing = existingStickies(getRoom(req.params.room))
-			const { plan, provider } = await planBoard(transcript, existing.map((e) => e.text))
-			const r = await applyPlan(req.params.room, plan, by, existing.map((e) => e.id))
-			return { provider, stickies: r.ids.length, connectors: r.connectorsDrawn }
-		})
+		const out = await runAgentTurn(req.params.room, transcript, by)
 		res.json({ ok: true, transcript, ...out })
 	} catch (e) {
 		console.error('[voice] error', e)
@@ -589,8 +629,7 @@ app.post('/api/rooms/:room/end', (req, res) => {
 })
 
 // Auto-arrange: re-lay every sticky into its kind-column, top-to-bottom (one-tap tidy).
-app.post('/api/rooms/:room/tidy', (req, res) => {
-	const room = getRoom(req.params.room)
+function tidyBoard(room: Room) {
 	const shapes = room.doc.getMap('shapes')
 	room.doc.transact(() => {
 		const rowByCol: Record<number, number> = {}
@@ -605,6 +644,9 @@ app.post('/api/rooms/:room/tidy', (req, res) => {
 			shapes.set(s.id, { ...s, x, y })
 		}
 	})
+}
+app.post('/api/rooms/:room/tidy', (req, res) => {
+	tidyBoard(getRoom(req.params.room))
 	res.json({ ok: true })
 })
 

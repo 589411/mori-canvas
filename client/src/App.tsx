@@ -364,6 +364,23 @@ export default function App() {
 		;(provider as any).awareness.setLocalState({ user: me, cursor: null })
 	}
 
+	// react to an agent response: a recognised voice command (apply view + show
+	// label) or normal content (show how many cards it made)
+	function applyAgentResponse(r: any, prefix = '') {
+		if (!r || !r.ok) {
+			setBusy(r?.error ? `錯誤:${r.error}` : '錯誤')
+			return
+		}
+		if (r.intent === 'command') {
+			const c = r.command
+			if (c?.action === 'filter') setFilter({ type: c.by === 'tag' ? 'tag' : 'owner', value: c.value })
+			else if (c?.action === 'clearFilter') setFilter(null)
+			setBusy(`指令:${r.commandLabel || '已執行'}`)
+		} else {
+			setBusy(`${prefix}+${r.added?.length ?? r.stickies ?? 0} 張、+${r.connectors ?? 0} 連線`)
+		}
+	}
+
 	async function runAgent() {
 		if (!agentText.trim()) return
 		setBusy('agent 思考中…')
@@ -373,7 +390,7 @@ export default function App() {
 				headers: { 'Content-Type': 'application/json' },
 				body: JSON.stringify({ transcript: agentText, by: me.name }),
 			}).then((x) => x.json())
-			setBusy(r.ok ? `agent(${r.provider}):+${r.added?.length ?? 0} 張、+${r.connectors ?? 0} 連線` : `錯誤:${r.error}`)
+			applyAgentResponse(r)
 		} catch (e) {
 			setBusy(`錯誤:${(e as Error).message}`)
 		}
@@ -446,7 +463,10 @@ export default function App() {
 			method: 'POST',
 			headers: { 'Content-Type': type },
 			body: blob,
-		}).catch(() => {})
+		})
+			.then((x) => x.json())
+			.then((r) => applyAgentResponse(r)) // a segment may be a spoken command, not content
+			.catch(() => {})
 	}
 
 	async function startMeeting() {
@@ -584,7 +604,7 @@ export default function App() {
 					`${SYNC_HTTP}/api/voice/${encodeURIComponent(room)}?ext=${ext}&by=${encodeURIComponent(me.name)}`,
 					{ method: 'POST', headers: { 'Content-Type': type }, body: blob }
 				).then((x) => x.json())
-				setBusy(r.ok ? `聽到「${r.transcript || '(空)'}」→ ${r.stickies ?? 0} 張` : `錯誤:${r.error}`)
+				applyAgentResponse(r, r.transcript ? `聽到「${r.transcript}」→ ` : '')
 			} catch (e) {
 				setBusy(`錯誤:${(e as Error).message}`)
 			}
@@ -601,7 +621,21 @@ export default function App() {
 	const btn: React.CSSProperties = {}
 
 	// exposed for verification / console poking
-	;(window as any).__wb = { addSticky, patchShape, deleteSticky, addConnector, clearAll }
+	;(window as any).__wb = {
+		addSticky,
+		patchShape,
+		deleteSticky,
+		addConnector,
+		clearAll,
+		cmd: async (t: string) =>
+			applyAgentResponse(
+				await fetch(`${SYNC_HTTP}/api/agent/${encodeURIComponent(room)}`, {
+					method: 'POST',
+					headers: { 'Content-Type': 'application/json' },
+					body: JSON.stringify({ transcript: t, by: me.name }),
+				}).then((x) => x.json())
+			),
+	}
 	;(window as any).__cursors = cursors
 
 	return (
@@ -630,7 +664,8 @@ export default function App() {
 						{(
 							[
 								['開始開會', '按左下「● 開始會議記錄」,正常講話 —— 停頓一下,AI 就把那段重點整理成便利貼。也可把逐字稿貼進面板按「丟給 agent」。'],
-								['顏色 = 類型', '__LEGEND__'],
+								['用講的下指令', '錄音中直接說「幫我排一下」「只看亞澤的」「把這張指給小明」「改成決議」,AI 會分辨那是指令、自動幫你執行,不用去找按鈕。'],
+							['顏色 = 類型', '__LEGEND__'],
 								['自己調整', '雙擊空白新增便利貼、雙擊卡片改字、拖拉移動;點一張卡可改色或刪除;「連線」把兩張卡的關係連起來。'],
 								['拉人一起', '右上「分享 / QR」—— 同事掃 QR 或輸入房號就進來,大家即時一起編輯。'],
 								['收尾', '按「會議摘要」,AI 一鍵產出一頁會議紀錄(決議 / 待辦 / 風險)。'],
