@@ -2,6 +2,10 @@
 
 > Mori 的共筆畫布(原 foss-whiteboard-spike)。Mori 宇宙的「會議白板」身體部件。
 
+**[立即試玩](https://mori-canvas.onrender.com/) ・ [使用手冊](https://yazelin.github.io/mori-canvas/) ・ 全 MIT、自架零授權成本**
+
+> 開發測試中,歡迎試玩(會有 bug),也歡迎 fork / clone 回去本地自己部署來玩。
+
 一個**自架、零授權成本(全 MIT)**的會議白板:**講話 / 貼逐字稿 → AI agent 自動整理成便利貼 + 連線 → 多人即時協作的白板**。人也能在同一張板上拖拉、改字、連線、刪除,所有動作即時同步。
 
 ```
