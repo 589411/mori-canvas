@@ -251,6 +251,12 @@ pub fn run_command(room: &Room, existing: &[ExistingCard], cmd: &AgentCommand, s
                 ("移動失敗".into(), None)
             }
         }
+        AgentCommand::Zones { titles } => {
+            for t in titles {
+                store::create_frame(room, "meeting", t);
+            }
+            (format!("開了 {} 個區:{}", titles.len(), titles.join("、")), None)
+        }
     }
 }
 
