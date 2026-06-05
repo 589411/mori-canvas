@@ -4,7 +4,7 @@
  * right way. The `hint` is injected into the agent prompt; `layout` drives the
  * auto-arrange algorithm; `colors`/`edgeLabel` drive the markdown export.
  */
-export type BoardLayout = 'columns' | 'tree' | 'radial' | 'quadrant'
+export type BoardLayout = 'columns' | 'tree' | 'radial' | 'quadrant' | 'fishbone' | 'gantt'
 export type BoardType = {
 	key: string
 	label: string
@@ -96,6 +96,26 @@ export const BOARD_TYPES: Record<string, BoardType> = {
 		hint: `這是【時間軸】。每張卡=一個事件/里程碑/階段,text 可含時間。用 color:green=已完成、yellow=進行中、blue=規劃中、red=延遲/風險。連線 from=較早 to=較晚,把事件依時間先後串成一條線。不要套會議的主題/決議概念。`,
 		colors: { green: '已完成', yellow: '進行中', blue: '規劃中', red: '延遲/風險' },
 		edgeLabel: '時序(早 → 晚)',
+	},
+	fishbone: {
+		key: 'fishbone',
+		label: '魚骨圖',
+		layout: 'fishbone',
+		dir: 'LR',
+		blurb: '問題的因果分析(石川圖)',
+		hint: `這是【魚骨圖 / 因果圖】。先有一張「問題/結果」卡(放魚頭,用 color blue);再把造成它的「主要原因分類」用 green;每個分類底下的「次要原因」用 yellow,特別關鍵的因素用 red。連線方向 from=原因 to=它造成的結果(次要原因→主要分類→問題)。務必讓所有原因最終都連到那張問題卡。不要套會議概念。`,
+		colors: { blue: '問題/結果', green: '主因分類', yellow: '次要原因', red: '關鍵因素' },
+		edgeLabel: '因果(原因 → 結果)',
+	},
+	gantt: {
+		key: 'gantt',
+		label: '甘特圖 / 排程',
+		layout: 'gantt',
+		dir: 'LR',
+		blurb: '任務排程:誰、何時、做什麼(列=負責人)',
+		hint: `這是【甘特圖 / 排程表】。每張卡=一個任務,text 含任務名(可含時間),owner=負責人(一定盡量填,會用來分列)。用 color:green=已完成、yellow=進行中、blue=未開始、red=延遲/卡關。連線 from=要先做的 to=接著做的(前置相依),把任務依時間先後串起來。不要套會議概念。`,
+		colors: { green: '已完成', yellow: '進行中', blue: '未開始', red: '延遲/卡關' },
+		edgeLabel: '相依(先 → 後)',
 	},
 }
 

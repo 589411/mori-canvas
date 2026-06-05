@@ -583,22 +583,39 @@ app.get('/api/export/:room', (req, res) => {
 	const shapes = [...doc.getMap('shapes').values()].filter((s: any) => s.type === 'sticky') as any[]
 	const conns = [...doc.getMap('connectors').values()] as any[]
 	const meta = boardMeta(room)
-	const bt = boardType(meta.type) // export reflects THIS board's type, not always 'meeting'
+	const frames = getFrames(room)
 	const named = (s: any) => (s.owner ? `(${s.owner})` : s.drawnBy && !['user', 'agent', 'voice', 'bot'].includes(s.drawnBy) ? `(${s.drawnBy})` : '')
 	const tagstr = (s: any) => (s.tags?.length ? ' ' + s.tags.map((t: string) => `#${t}`).join(' ') : '')
-	// group cards by this board type's colour meanings (e.g. meeting=主題/待辦…, org=最高層/主管…)
+	const txt = (id: string) => shapes.find((s) => s.id === id)?.text ?? '?'
 	const order = ['blue', 'green', 'yellow', 'red']
-	const byCat: Record<string, string[]> = {}
-	for (const s of shapes) {
-		const cat = bt.colors[s.color] || '其他'
-		;(byCat[cat] ??= []).push(`- ${s.text}${named(s)}${tagstr(s)}`)
+	// render one diagram's cards grouped by its type's colour meanings + its edges
+	const section = (heading: string, typeKey: string, cards: any[], hLevel: string) => {
+		const bt = boardType(typeKey)
+		const byCat: Record<string, string[]> = {}
+		for (const s of cards) (byCat[bt.colors[s.color] || '其他'] ??= []).push(`- ${s.text}${named(s)}${tagstr(s)}`)
+		let out = `${hLevel} ${heading}\n`
+		for (const cat of [...order.map((c) => bt.colors[c]).filter(Boolean), '其他'])
+			if (byCat[cat]?.length) out += `\n**${cat}**\n${byCat[cat].join('\n')}\n`
+		const ids = new Set(cards.map((c) => c.id))
+		const edges = conns.filter((c) => ids.has(c.from) && ids.has(c.to))
+		if (edges.length) out += `\n**${bt.edgeLabel}**\n${edges.map((c) => `- ${txt(c.from)} → ${txt(c.to)}`).join('\n')}\n`
+		return out + '\n'
 	}
-	let md = `# ${bt.label}:${meta.topic || req.params.room}\n\n`
-	const cats = [...order.map((c) => bt.colors[c]).filter(Boolean), '其他']
-	for (const cat of cats) if (byCat[cat]?.length) md += `## ${cat}\n${byCat[cat].join('\n')}\n\n`
-	if (conns.length) {
-		const txt = (id: string) => shapes.find((s) => s.id === id)?.text ?? '?'
-		md += `## ${bt.edgeLabel}\n${conns.map((c) => `- ${txt(c.from)} → ${txt(c.to)}`).join('\n')}\n`
+	let md = ''
+	if (frames.length) {
+		md = `# 會議白板:${meta.topic || req.params.room}\n\n`
+		for (const f of frames) md += section(`${boardType(f.type).label}:${f.title}`, f.type, shapes.filter((s) => s.frameId === f.id), '##')
+		const loose = shapes.filter((s) => !s.frameId || !frames.some((f) => f.id === s.frameId))
+		if (loose.length) md += section('其他便利貼', meta.type, loose, '##')
+		const xref = conns.filter((c) => {
+			const a = shapes.find((s) => s.id === c.from)
+			const b = shapes.find((s) => s.id === c.to)
+			return a && b && a.frameId && b.frameId && a.frameId !== b.frameId
+		})
+		if (xref.length) md += `## 跨圖關聯\n${xref.map((c) => `- ${txt(c.from)} → ${txt(c.to)}`).join('\n')}\n`
+	} else {
+		// single-diagram board (no frames)
+		md = section(`${boardType(meta.type).label}:${meta.topic || req.params.room}`, meta.type, shapes, '#')
 	}
 	res.setHeader('Content-Type', 'text/markdown; charset=utf-8')
 	res.send(md)
@@ -839,11 +856,97 @@ function quadrantPositions(cards: any[], ox: number, oy: number): Pos {
 	return pos
 }
 
+// fishbone: problem at the right "head", causes branch off the spine above/below
+function fishbonePositions(cards: any[], conns: any[], ox: number, oy: number): Pos {
+	const pos: Pos = new Map()
+	if (!cards.length) return pos
+	const { ids, children } = buildGraph(cards, conns)
+	let head = ids.find((id) => (children.get(id) || []).length === 0) || ids[0]
+	const parents = new Map<string, string[]>(ids.map((id) => [id, []]))
+	for (const f of ids) for (const t of children.get(f) || []) parents.get(t)!.push(f)
+	const level = new Map<string, number>([[head, 0]])
+	const q: [string, number][] = [[head, 0]]
+	let g = 0
+	while (q.length && g++ < 20000) {
+		const [id, lv] = q.shift()!
+		for (const p of parents.get(id) || [])
+			if (!level.has(p)) {
+				level.set(p, lv + 1)
+				q.push([p, lv + 1])
+			}
+	}
+	ids.forEach((id) => {
+		if (!level.has(id)) level.set(id, 1)
+	})
+	const byLevel = new Map<number, string[]>()
+	for (const id of ids) {
+		const lv = level.get(id)!
+		if (!byLevel.has(lv)) byLevel.set(lv, [])
+		byLevel.get(lv)!.push(id)
+	}
+	const maxLv = Math.max(...[...level.values()])
+	const GX = 250
+	const GY = 230
+	let maxOff = 1
+	for (const [lv, list] of byLevel) if (lv > 0) maxOff = Math.max(maxOff, Math.ceil(list.length / 2))
+	const spineY = oy + maxOff * GY
+	for (const [lv, list] of byLevel) {
+		if (lv === 0) {
+			pos.set(list[0], { x: ox + maxLv * GX, y: spineY })
+			continue
+		}
+		list.forEach((id, i) => {
+			const above = i % 2 === 0
+			const yOff = (Math.floor(i / 2) + 1) * GY * (above ? -1 : 1)
+			pos.set(id, { x: ox + (maxLv - lv) * GX, y: spineY + yOff })
+		})
+	}
+	return pos
+}
+
+// gantt / schedule: columns = time order (topological), rows = owner swimlanes
+function ganttPositions(cards: any[], conns: any[], ox: number, oy: number): Pos {
+	const pos: Pos = new Map()
+	if (!cards.length) return pos
+	const byId = new Map(cards.map((c) => [c.id, c]))
+	const { ids, children, indeg } = buildGraph(cards, conns)
+	const indegC = new Map(ids.map((id) => [id, indeg.get(id) || 0]))
+	const queue = ids.filter((id) => (indegC.get(id) || 0) === 0).sort((a, b) => byId.get(a).x - byId.get(b).x)
+	const order: string[] = []
+	const seen = new Set<string>()
+	let g = 0
+	while (queue.length && g++ < 20000) {
+		const id = queue.shift()!
+		if (seen.has(id)) continue
+		seen.add(id)
+		order.push(id)
+		for (const t of children.get(id) || []) {
+			indegC.set(t, (indegC.get(t) || 0) - 1)
+			if ((indegC.get(t) || 0) <= 0) queue.push(t)
+		}
+	}
+	for (const id of ids) if (!seen.has(id)) order.push(id)
+	const rowOf = new Map<string, number>()
+	for (const id of order) {
+		const o = byId.get(id).owner || '未指派'
+		if (!rowOf.has(o)) rowOf.set(o, rowOf.size)
+	}
+	const GX = W + 40
+	const GY = H + 30
+	order.forEach((id, col) => {
+		const o = byId.get(id).owner || '未指派'
+		pos.set(id, { x: ox + col * GX, y: oy + (rowOf.get(o) || 0) * GY })
+	})
+	return pos
+}
+
 function layoutPositions(typeKey: string, cards: any[], conns: any[], ox: number, oy: number): Pos {
 	const bt = boardType(typeKey)
 	if (bt.layout === 'tree') return treePositions(cards, conns, ox, oy, bt.dir)
 	if (bt.layout === 'radial') return radialPositions(cards, conns, ox, oy)
 	if (bt.layout === 'quadrant') return quadrantPositions(cards, ox, oy)
+	if (bt.layout === 'fishbone') return fishbonePositions(cards, conns, ox, oy)
+	if (bt.layout === 'gantt') return ganttPositions(cards, conns, ox, oy)
 	return colPositions(cards, ox, oy)
 }
 

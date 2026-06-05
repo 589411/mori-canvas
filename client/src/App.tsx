@@ -44,6 +44,8 @@ const WB_TYPES: { key: string; label: string; blurb: string }[] = [
 	{ key: 'kanban', label: '看板', blurb: '依狀態分欄的任務看板' },
 	{ key: 'swot', label: 'SWOT / 矩陣', blurb: '四象限分析(優勢/劣勢/機會/威脅)' },
 	{ key: 'timeline', label: '時間軸', blurb: '依時間先後排列的事件/里程碑' },
+	{ key: 'fishbone', label: '魚骨圖', blurb: '問題的因果分析(石川圖)' },
+	{ key: 'gantt', label: '甘特圖 / 排程', blurb: '任務排程,列=負責人,左→右時間' },
 ]
 const typeLabel = (k: string) => WB_TYPES.find((t) => t.key === k)?.label || '白板'
 // Same-origin: the API and the sync websocket both go through Vite's reverse
@@ -136,6 +138,7 @@ export default function App() {
 	const [connectMode, setConnectMode] = useState(false)
 	const [connectFrom, setConnectFrom] = useState<string | null>(null)
 	const [editing, setEditing] = useState<{ id: string; value: string } | null>(null)
+	const [editingFrame, setEditingFrame] = useState<{ id: string; value: string } | null>(null)
 	const [agentText, setAgentText] = useState('') // manual-transcript draft (local only, not synced)
 	const [showPaste, setShowPaste] = useState(false) // the paste-transcript option is hidden by default
 	const [busy, setBusy] = useState('')
@@ -176,6 +179,17 @@ export default function App() {
 	const patchShape = (id: string, patch: Partial<Sticky>) => {
 		const cur = yShapes.get(id)
 		if (cur) tx(() => yShapes.set(id, { ...cur, ...patch }))
+	}
+	const patchFrame = (id: string, patch: any) => {
+		const cur = yFrames.get(id)
+		if (cur) tx(() => yFrames.set(id, { ...cur, ...patch }))
+	}
+	// move a frame and all its cards together by (dx,dy)
+	const moveFrame = (f: any, dx: number, dy: number) => {
+		tx(() => {
+			yFrames.set(f.id, { ...f, x: f.x + dx, y: f.y + dy })
+			for (const s of yShapes.values()) if ((s as any).frameId === f.id) yShapes.set(s.id, { ...s, x: s.x + dx, y: s.y + dy } as any)
+		})
 	}
 	const addSticky = (x: number, y: number, text = '', color = 'yellow') => {
 		const id = `sticky-${Math.random().toString(36).slice(2, 10)}`
@@ -798,7 +812,7 @@ export default function App() {
 				<Layer>
 					{/* diagram frames (behind everything) — each is a typed sub-board */}
 					{frames.map((f) => (
-						<Group key={f.id} listening={false}>
+						<Group key={f.id}>
 							<Rect
 								x={f.x}
 								y={f.y}
@@ -808,8 +822,30 @@ export default function App() {
 								fill="rgba(255,255,255,0.32)"
 								stroke="rgba(28,26,23,0.16)"
 								strokeWidth={1.5}
+								listening={false}
 							/>
-							<Rect x={f.x} y={f.y} width={f.w} height={34} cornerRadius={[18, 18, 0, 0]} fill="rgba(180,83,10,0.1)" />
+							{/* title bar = drag handle (moves frame + its cards); double-click to rename */}
+							<Rect
+								x={f.x}
+								y={f.y}
+								width={f.w}
+								height={34}
+								cornerRadius={[18, 18, 0, 0]}
+								fill="rgba(180,83,10,0.1)"
+								draggable
+								onDragMove={(e: any) => {
+									const dx = e.target.x() - f.x
+									const dy = e.target.y() - f.y
+									if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) moveFrame(f, dx, dy)
+									e.target.position({ x: f.x, y: f.y })
+								}}
+								onDblClick={(e: any) => {
+									e.cancelBubble = true
+									setEditingFrame({ id: f.id, value: f.title || '' })
+								}}
+								onMouseEnter={(e: any) => (e.target.getStage().container().style.cursor = 'move')}
+								onMouseLeave={(e: any) => (e.target.getStage().container().style.cursor = 'default')}
+							/>
 							<Text
 								x={f.x + 16}
 								y={f.y + 10}
@@ -818,6 +854,25 @@ export default function App() {
 								fontStyle="600"
 								fontFamily={CANVAS_FONT}
 								fill="rgba(28,26,23,0.66)"
+								listening={false}
+							/>
+							{/* resize handle (bottom-right) */}
+							<Rect
+								x={f.x + f.w - 18}
+								y={f.y + f.h - 18}
+								width={16}
+								height={16}
+								cornerRadius={4}
+								fill="rgba(28,26,23,0.18)"
+								draggable
+								onDragMove={(e: any) => {
+									const w = Math.max(280, e.target.x() - f.x + 18)
+									const h = Math.max(200, e.target.y() - f.y + 18)
+									patchFrame(f.id, { w, h })
+									e.target.position({ x: f.x + w - 18, y: f.y + h - 18 })
+								}}
+								onMouseEnter={(e: any) => (e.target.getStage().container().style.cursor = 'nwse-resize')}
+								onMouseLeave={(e: any) => (e.target.getStage().container().style.cursor = 'default')}
 							/>
 						</Group>
 					))}
@@ -831,13 +886,17 @@ export default function App() {
 						const [x1, y1] = edgePoint(ac[0], ac[1], a.w / 2, a.h / 2, bc[0], bc[1])
 						const [x2, y2] = edgePoint(bc[0], bc[1], b.w / 2, b.h / 2, ac[0], ac[1])
 						const sel = c.id === selectedConnId
+						// a connector spanning two different diagrams = a cross-reference, drawn dashed
+						const cross = a.frameId && b.frameId && a.frameId !== b.frameId
+						const baseColor = cross ? 'rgba(124,58,160,0.6)' : 'rgba(28,26,23,0.4)'
 						return (
 							<Arrow
 								key={c.id}
 								points={[x1, y1, x2, y2]}
-								stroke={sel ? ACCENT : 'rgba(28,26,23,0.4)'}
-								fill={sel ? ACCENT : 'rgba(28,26,23,0.4)'}
+								stroke={sel ? ACCENT : baseColor}
+								fill={sel ? ACCENT : baseColor}
 								strokeWidth={sel ? 3.5 : 2}
+								dash={cross ? [10, 7] : undefined}
 								hitStrokeWidth={16}
 								pointerLength={10}
 								pointerWidth={10}
@@ -1030,6 +1089,40 @@ export default function App() {
 								resize: 'none',
 								background: COLORS[s.color] ?? s.color,
 								zIndex: 2000,
+							}}
+						/>
+					)
+				})()}
+
+			{/* frame title editor */}
+			{editingFrame &&
+				(() => {
+					const f = frames.find((x) => x.id === editingFrame.id)
+					if (!f) return null
+					return (
+						<input
+							autoFocus
+							value={editingFrame.value}
+							onChange={(e) => setEditingFrame({ id: editingFrame.id, value: e.target.value })}
+							onBlur={() => {
+								patchFrame(editingFrame.id, { title: editingFrame.value.slice(0, 40) })
+								setEditingFrame(null)
+							}}
+							onKeyDown={(e) => {
+								if (e.key === 'Enter') (e.target as HTMLInputElement).blur()
+								if (e.key === 'Escape') setEditingFrame(null)
+							}}
+							style={{
+								position: 'fixed',
+								left: view.x + (f.x + 52) * view.scale,
+								top: view.y + (f.y + 6) * view.scale,
+								width: Math.max(120, (f.w - 70) * view.scale),
+								fontSize: 14 * view.scale,
+								padding: '3px 8px',
+								border: '2px solid var(--accent)',
+								borderRadius: 6,
+								zIndex: 2000,
+								background: '#fff',
 							}}
 						/>
 					)
