@@ -182,7 +182,8 @@ export default function App() {
 	const [exportOpen, setExportOpen] = useState(false)
 	const [pngTransparent, setPngTransparent] = useState(false)
 	const [settingsOpen, setSettingsOpen] = useState(false)
-	const [settings, setSettings] = useState({ localOnly: false, groqKey: true, spacing: 1, autoTidy: true })
+	const [settings, setSettings] = useState({ localOnly: false, groqKey: true, spacing: 1, autoTidy: true, mode: 'mori', sttSource: 'local' })
+	const [caps, setCaps] = useState({ moriEar: true, whisperServer: true, groqKey: true })
 	const [cfgInfo, setCfgInfo] = useState({ llmGroqModel: '', llmOllamaModel: '', sttProvider: '', sttGroqModel: '', sttLocalModel: '' })
 	const [subtitle, setSubtitle] = useState('') // transient STT caption (UX feedback)
 	const subtitleTimer = useRef<any>(null)
@@ -260,7 +261,10 @@ export default function App() {
 		})
 			.then((x) => x.json())
 			.catch(() => null)
-		if (r?.ok) setSettings({ localOnly: r.localOnly, groqKey: r.groqKey, spacing: r.spacing, autoTidy: r.autoTidy })
+		if (r?.ok) {
+			setSettings({ localOnly: r.localOnly, groqKey: r.groqKey, spacing: r.spacing, autoTidy: r.autoTidy, mode: r.mode, sttSource: r.sttSource })
+			setCaps({ moriEar: r.moriEar, whisperServer: r.whisperServer, groqKey: r.groqKey })
+		}
 		if (patch.spacing !== undefined) tidy() // re-arrange so the new spacing shows immediately
 	}
 	// set this board's type/topic (server-side, authoritative) then re-arrange
@@ -406,7 +410,8 @@ export default function App() {
 			.then((x) => x.json())
 			.then((r) => {
 				if (!r?.ok) return
-				setSettings({ localOnly: r.localOnly, groqKey: r.groqKey, spacing: r.spacing, autoTidy: r.autoTidy })
+				setSettings({ localOnly: r.localOnly, groqKey: r.groqKey, spacing: r.spacing, autoTidy: r.autoTidy, mode: r.mode, sttSource: r.sttSource })
+				setCaps({ moriEar: r.moriEar, whisperServer: r.whisperServer, groqKey: r.groqKey })
 				setCfgInfo({ llmGroqModel: r.llmGroqModel, llmOllamaModel: r.llmOllamaModel, sttProvider: r.sttProvider, sttGroqModel: r.sttGroqModel, sttLocalModel: r.sttLocalModel })
 			})
 			.catch(() => {})
@@ -1422,25 +1427,57 @@ export default function App() {
 						<div style={{ fontWeight: 700, fontSize: 16 }}>設定</div>
 						<div style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '4px 0 16px' }}>即時生效、不寫死。</div>
 
-						<div style={{ fontWeight: 600, fontSize: 14, marginBottom: 6 }}>AI 處理</div>
-						<div style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
-							<button
-								disabled={!settings.groqKey}
-								onClick={() => saveSettings({ localOnly: false })}
-								style={{ flex: 1, ...(!settings.localOnly ? { background: 'var(--accent-soft)', borderColor: 'var(--accent)', color: 'var(--accent)' } : {}) }}
-							>
-								雲端 Groq{!settings.groqKey ? '(無 key)' : ''}
-							</button>
-							<button
-								onClick={() => saveSettings({ localOnly: true })}
-								style={{ flex: 1, ...(settings.localOnly ? { background: 'var(--accent-soft)', borderColor: 'var(--accent)', color: 'var(--accent)' } : {}) }}
-							>
-								本機 qwen3
-							</button>
-						</div>
-						<div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 18 }}>
-							{settings.localOnly ? '逐字稿與內容只用本機模型、不出網(較慢)。' : '用雲端 Groq(快,需 API key);連不到時自動退回本機。'}
-						</div>
+						{(() => {
+							const ON = { background: 'var(--accent-soft)', borderColor: 'var(--accent)', color: 'var(--accent)' }
+							return (
+								<>
+									<div style={{ fontWeight: 600, fontSize: 14, marginBottom: 6 }}>處理方式</div>
+									<div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+										<button disabled={!caps.moriEar} onClick={() => saveSettings({ mode: 'mori' })} style={{ flex: 1, ...(settings.mode === 'mori' ? ON : {}) }}>
+											Mori 處理{!caps.moriEar ? '(未裝)' : ''}
+										</button>
+										<button onClick={() => saveSettings({ mode: 'custom' })} style={{ flex: 1, ...(settings.mode === 'custom' ? ON : {}) }}>
+											自訂
+										</button>
+									</div>
+									<div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: settings.mode === 'custom' ? 10 : 18 }}>
+										{settings.mode === 'mori'
+											? '用 mori-ear 處理語音(本機 whisper / Groq 由 ear 自己決定);AI 整理走共用 config。'
+											: '本軟體自己處理、不需要 mori-ear。語音與文字理解各自選雲端或本機;自訂模式會先做靜音剪(避免靜音幻覺)。'}
+									</div>
+
+									{settings.mode === 'custom' && (
+										<div style={{ border: '1px solid var(--line)', borderRadius: 12, padding: 12, marginBottom: 18 }}>
+											<div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>語音轉文字(Whisper)</div>
+											<div style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
+												<button disabled={!caps.groqKey} onClick={() => saveSettings({ sttSource: 'cloud' })} style={{ flex: 1, ...(settings.sttSource === 'cloud' ? ON : {}) }}>
+													雲端 Groq{!caps.groqKey ? '(無 key)' : ''}
+												</button>
+												<button onClick={() => saveSettings({ sttSource: 'local' })} style={{ flex: 1, ...(settings.sttSource === 'local' ? ON : {}) }}>
+													本機 whisper
+												</button>
+											</div>
+											<div style={{ fontSize: 11.5, color: 'var(--ink-soft)', marginBottom: 12, lineHeight: 1.6 }}>
+												{settings.sttSource === 'local'
+													? caps.whisperServer
+														? '打你本機的 whisper-server（/inference）。GPU 或 CPU 版自己裝(做法同 meeting-recorder)。'
+														: '⚠ 沒偵測到本機 whisper-server,要先自行安裝並啟動。'
+													: '用你自己的 Groq API key 打 Groq Whisper。'}
+											</div>
+											<div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>文字理解(LLM)</div>
+											<div style={{ display: 'flex', gap: 8 }}>
+												<button disabled={!caps.groqKey} onClick={() => saveSettings({ localOnly: false })} style={{ flex: 1, ...(!settings.localOnly ? ON : {}) }}>
+													雲端 Groq
+												</button>
+												<button onClick={() => saveSettings({ localOnly: true })} style={{ flex: 1, ...(settings.localOnly ? ON : {}) }}>
+													本機 Ollama
+												</button>
+											</div>
+										</div>
+									)}
+								</>
+							)
+						})()}
 
 						<div style={{ fontWeight: 600, fontSize: 14, marginBottom: 6 }}>語音轉文字(Whisper)與模型</div>
 						<div style={{ fontSize: 12, color: 'var(--ink-soft)', lineHeight: 1.6, marginBottom: 8 }}>
@@ -1451,7 +1488,7 @@ export default function App() {
 							<div>· <b>雲端 Whisper 模型</b> <code>providers.groq.stt_model</code> = {cfgInfo.sttGroqModel || '?'}</div>
 							<div>· <b>本機 Whisper 模型</b> <code>whisper-local.model_path</code>:</div>
 							<div style={{ wordBreak: 'break-all', paddingLeft: 14, color: 'var(--ink)' }}>{cfgInfo.sttLocalModel || '?'}</div>
-							<div style={{ color: 'var(--ink-soft)', paddingLeft: 14 }}>(檔名含 small = CPU Small 版;換成 V3 Turbo 的 .bin = GPU 版)</div>
+							<div style={{ color: 'var(--ink-soft)', paddingLeft: 14 }}>(small=小模型較快、large-v3-turbo=大模型較準;GPU/CPU 看 whisper-server 是哪個 build,跟模型無關)</div>
 							<hr style={{ border: 0, borderTop: '1px solid var(--line)', margin: '8px 0' }} />
 							<div>· <b>AI 整理模型</b> 雲端 <code>providers.groq.model</code> = {cfgInfo.llmGroqModel || '?'}</div>
 							<div>· 本機 <code>providers.ollama.model</code> = {cfgInfo.llmOllamaModel || '?'}</div>

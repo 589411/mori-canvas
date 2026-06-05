@@ -25,11 +25,18 @@ import { tmpdir, networkInterfaces } from 'node:os'
 import { join as pathJoin } from 'node:path'
 import { planAgent, planCardEdit, type BoardPlan, type ExistingCard, type AgentCommand } from './agent.ts'
 import { boardType, BOARD_TYPES, DEFAULT_BOARD_TYPE } from './board-types.ts'
-import { transcribe } from './stt.ts'
+import { transcribe, sttCapabilities } from './stt.ts'
 import { chat, setLocalOnly, llmStatus, configInfo } from './llm.ts'
 
 // runtime settings adjustable from the page's ⚙ (not hardcoded). Global to the server.
-const SETTINGS = { spacing: 1, autoTidy: true }
+const _cap0 = sttCapabilities()
+const SETTINGS = {
+	spacing: 1,
+	autoTidy: true,
+	mode: (_cap0.moriEar ? 'mori' : 'custom') as 'mori' | 'custom', // STT processing: Mori ecosystem vs standalone
+	sttSource: (_cap0.whisperServer ? 'local' : 'cloud') as 'cloud' | 'local', // used in custom mode
+}
+const sttOpts = () => ({ mode: SETTINGS.mode, sttSource: SETTINGS.sttSource })
 const sp = () => SETTINGS.spacing
 
 const PORT = 1234
@@ -548,7 +555,7 @@ app.post('/api/voice/:room', rateLimit, express.raw({ type: () => true, limit: '
 	const tmp = pathJoin(tmpdir(), `voice-${rid('a')}.${ext}`)
 	try {
 		await writeFile(tmp, req.body as Buffer)
-		const transcript = await transcribe(tmp) // STT outside the lock (room-independent)
+		const transcript = await transcribe(tmp, sttOpts()) // STT outside the lock (room-independent)
 		if (!transcript) {
 			res.json({ ok: true, transcript: '', stickies: 0, note: 'empty transcript' })
 			return
@@ -570,7 +577,7 @@ app.post('/api/transcribe', rateLimit, express.raw({ type: () => true, limit: '2
 	const tmp = pathJoin(tmpdir(), `t-${rid('a')}.${ext}`)
 	try {
 		await writeFile(tmp, req.body as Buffer)
-		const text = await transcribe(tmp)
+		const text = await transcribe(tmp, sttOpts())
 		res.json({ ok: true, text })
 	} catch (e) {
 		res.status(500).json({ ok: false, error: (e as Error).message })
@@ -586,7 +593,7 @@ app.post('/api/card/:room/:cardId', rateLimit, express.raw({ type: () => true, l
 	const tmp = pathJoin(tmpdir(), `c-${rid('a')}.${ext}`)
 	try {
 		await writeFile(tmp, req.body as Buffer)
-		const transcript = await transcribe(tmp)
+		const transcript = await transcribe(tmp, sttOpts())
 		const room = getRoom(req.params.room)
 		const shapes = room.doc.getMap('shapes')
 		const cur = shapes.get(req.params.cardId) as any
@@ -1062,12 +1069,23 @@ app.post('/api/rooms/:room/meta', (req, res) => {
 })
 
 // page settings: AI processing (cloud/local) + auto-arrange tuning (not hardcoded)
-app.get('/api/settings', (_req, res) => res.json({ ok: true, ...llmStatus(), ...configInfo(), spacing: SETTINGS.spacing, autoTidy: SETTINGS.autoTidy }))
+const settingsPayload = () => ({
+	...llmStatus(),
+	...configInfo(),
+	...sttCapabilities(),
+	mode: SETTINGS.mode,
+	sttSource: SETTINGS.sttSource,
+	spacing: SETTINGS.spacing,
+	autoTidy: SETTINGS.autoTidy,
+})
+app.get('/api/settings', (_req, res) => res.json({ ok: true, ...settingsPayload() }))
 app.post('/api/settings', (req, res) => {
 	if (typeof req.body?.localOnly === 'boolean') setLocalOnly(req.body.localOnly)
+	if (req.body?.mode === 'mori' || req.body?.mode === 'custom') SETTINGS.mode = req.body.mode
+	if (req.body?.sttSource === 'cloud' || req.body?.sttSource === 'local') SETTINGS.sttSource = req.body.sttSource
 	if (typeof req.body?.spacing === 'number') SETTINGS.spacing = Math.min(2, Math.max(0.6, req.body.spacing))
 	if (typeof req.body?.autoTidy === 'boolean') SETTINGS.autoTidy = req.body.autoTidy
-	res.json({ ok: true, ...llmStatus(), spacing: SETTINGS.spacing, autoTidy: SETTINGS.autoTidy })
+	res.json({ ok: true, ...settingsPayload() })
 })
 
 // frames = the diagrams on a meeting's canvas
