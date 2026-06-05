@@ -2058,8 +2058,11 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 						style={{
 							background: 'var(--surface)',
 							borderRadius: 18,
-							padding: 24,
-							width: 320,
+							padding: 20,
+							width: 'min(340px, 92vw)',
+							maxHeight: '90dvh',
+							overflowY: 'auto',
+							boxSizing: 'border-box',
 							textAlign: 'center',
 							boxShadow: '0 24px 60px -20px rgba(28,26,23,0.45)',
 						}}
@@ -2076,7 +2079,7 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 						<div style={{ color: 'var(--ink-soft)', fontSize: 13 }}>用手機掃 QR,或輸入房號加入</div>
 						<div className="code" style={{ fontSize: 52, color: 'var(--accent)', margin: '6px 0 16px', lineHeight: 1 }}>{room}</div>
 						{qrUrl ? (
-							<img src={qrUrl} width={240} height={240} alt="QR" style={{ border: '1px solid var(--line)', borderRadius: 8 }} />
+							<img src={qrUrl} alt="QR" style={{ width: '100%', maxWidth: 240, height: 'auto', border: '1px solid var(--line)', borderRadius: 8 }} />
 						) : (
 							<div style={{ height: 240, lineHeight: '240px', color: 'var(--ink-soft)' }}>產生 QR 中…</div>
 						)}

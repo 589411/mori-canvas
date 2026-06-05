@@ -195,7 +195,7 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
   input, textarea, select { font-size: 16px !important; }
   /* tools become a compact icon-only row under the top bar, horizontally scrollable —
      no longer a tall left column colliding with the bottom record panel */
-  .toolstrip { top: calc(58px + env(safe-area-inset-top, 0px)); left: 8px; right: 8px; flex-direction: row; gap: 5px; overflow-x: auto; padding: 5px 7px; border-radius: 13px; background: var(--surface); box-shadow: 0 4px 16px rgba(28,26,23,0.1); scrollbar-width: none; }
+  .toolstrip { top: calc(74px + env(safe-area-inset-top, 0px)); left: 8px; right: 8px; flex-direction: row; gap: 5px; overflow-x: auto; padding: 5px 7px; border-radius: 13px; background: var(--surface); box-shadow: 0 4px 16px rgba(28,26,23,0.1); scrollbar-width: none; }
   .toolstrip::-webkit-scrollbar { display: none; }
   .toolstrip .tool { flex: 0 0 auto; font-size: 0; gap: 0; padding: 10px; min-height: 44px; }
   .toolstrip .tool svg { width: 22px; height: 22px; margin: 0; }
