@@ -316,6 +316,76 @@ export default function App() {
 	function exportMd() {
 		window.open(`${SYNC_HTTP}/api/export/${encodeURIComponent(room)}`, '_blank')
 	}
+	// a self-contained, styled HTML meeting record: AI summary + the word-for-word
+	// transcript. Double-click the .html to read it in any browser (no tools needed).
+	async function exportHtml() {
+		setBusy('產生會議紀錄(HTML)…')
+		const esc = (s: string) => (s || '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' } as any)[c])
+		const bold = (s: string) => s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>')
+		const mdToHtml = (md: string) => {
+			let out = '',
+				inList = false
+			const close = () => {
+				if (inList) {
+					out += '</ul>'
+					inList = false
+				}
+			}
+			for (const raw of (md || '').split('\n')) {
+				const line = raw.trimEnd()
+				const li = (t: string) => `<li>${bold(esc(t))}</li>`
+				if (/^###\s/.test(line)) (close(), (out += `<h3>${bold(esc(line.slice(4)))}</h3>`))
+				else if (/^##\s/.test(line)) (close(), (out += `<h2>${bold(esc(line.slice(3)))}</h2>`))
+				else if (/^#\s/.test(line)) (close(), (out += `<h1>${bold(esc(line.slice(2)))}</h1>`))
+				else if (/^[-*]\s/.test(line)) {
+					if (!inList) {
+						out += '<ul>'
+						inList = true
+					}
+					out += li(line.slice(2))
+				} else if (line.trim() === '') close()
+				else (close(), (out += `<p>${bold(esc(line))}</p>`))
+			}
+			close()
+			return out
+		}
+		let summaryMd = ''
+		try {
+			summaryMd = await fetch(`${SYNC_HTTP}/api/summary/${encodeURIComponent(room)}`).then((x) => x.text())
+		} catch {
+			summaryMd = '(摘要產生失敗)'
+		}
+		const tHtml = transcript.length
+			? transcript.map((e: any) => `<div class="t"><span class="m">${esc((e.t || '').slice(11, 16))} ${esc(e.by || '')}</span>${esc(e.text || '')}</div>`).join('')
+			: '<p class="muted">(這場沒有逐字記錄)</p>'
+		const date = new Date().toLocaleString('zh-TW')
+		const html = `<!doctype html><html lang="zh-TW"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>會議紀錄 · ${esc(room)}</title>
+<style>
+:root{--ink:#1c1a17;--soft:#6b655c;--line:#e7e1d6;--accent:#b4530a;--bg:#faf7f1}
+*{box-sizing:border-box}body{margin:0;background:var(--bg);color:var(--ink);font-family:'Hanken Grotesk','Noto Sans TC','PingFang TC','Microsoft JhengHei',system-ui,sans-serif;line-height:1.6}
+.wrap{max-width:760px;margin:0 auto;padding:40px 24px 64px}
+header{border-bottom:2px solid var(--accent);padding-bottom:14px;margin-bottom:24px}
+h1{font-size:26px;margin:0 0 4px}.sub{color:var(--soft);font-size:13px}
+h2{font-size:19px;margin:28px 0 8px;color:var(--accent)}h3{font-size:15px;margin:16px 0 6px}
+ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
+.transcript{margin-top:8px}.t{font-size:13px;padding:5px 0;border-bottom:1px solid var(--line)}
+.t .m{color:var(--soft);font-size:11px;margin-right:8px;white-space:nowrap}
+.muted{color:var(--soft)}footer{margin-top:40px;color:var(--soft);font-size:12px;text-align:center}
+@media print{body{background:#fff}.wrap{max-width:none}}
+</style></head><body><div class="wrap">
+<header><h1>會議紀錄</h1><div class="sub">房號 ${esc(room)}${boardTopic ? ' · ' + esc(boardTopic) : ''} · ${esc(date)}</div></header>
+<section>${mdToHtml(summaryMd)}</section>
+<section class="transcript"><h2>逐字記錄</h2>${tHtml}</section>
+<footer>由 Mori Canvas 共筆白板產生</footer>
+</div></body></html>`
+		const blob = new Blob([html], { type: 'text/html;charset=utf-8' })
+		const a = document.createElement('a')
+		a.href = URL.createObjectURL(blob)
+		a.download = `會議紀錄-${room}-${new Date().toISOString().slice(0, 10)}.html`
+		a.click()
+		setTimeout(() => URL.revokeObjectURL(a.href), 1000)
+		setBusy('已下載會議紀錄(HTML)')
+	}
 	function joinRoom() {
 		const c = joinCode.trim().toUpperCase()
 		if (c && c !== room) location.href = `${location.pathname}?room=${encodeURIComponent(c)}`
@@ -1639,6 +1709,13 @@ export default function App() {
 						>
 							<div style={{ fontWeight: 600, fontSize: 14 }}>會議摘要</div>
 							<div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>AI 把整張板整理成一頁紀錄(另開頁面)</div>
+						</button>
+						<button
+							style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 8, padding: '11px 12px' }}
+							onClick={() => { exportHtml(); setExportOpen(false) }}
+						>
+							<div style={{ fontWeight: 600, fontSize: 14 }}>會議紀錄 (HTML) · 含逐字稿</div>
+							<div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>下載 .html —— 摘要 + 逐字稿,雙擊就能在瀏覽器看</div>
 						</button>
 						<button
 							style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 8, padding: '11px 12px' }}
