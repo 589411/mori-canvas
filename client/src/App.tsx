@@ -235,6 +235,7 @@ export default function App() {
 	const [exportOpen, setExportOpen] = useState(false)
 	const [pngTransparent, setPngTransparent] = useState(false)
 	const [settingsOpen, setSettingsOpen] = useState(false)
+	const [menuOpen, setMenuOpen] = useState(false) // mobile top-bar overflow menu
 	const [settings, setSettings] = useState({ localOnly: false, groqKey: true, spacing: 1, autoTidy: true, mode: 'mori', sttSource: 'local', whisperUrl: '' })
 	// bring your own AI: any OpenAI-compatible base + key + model -> visitor's own quota
 	const [byo, setByo] = useState(() => ({ base: localStorage.getItem('wb-llm-base') || '', key: localStorage.getItem('wb-llm-key') || '', model: localStorage.getItem('wb-llm-model') || '' }))
@@ -1553,15 +1554,37 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 					)
 				})()}
 
-						{/* room bar (top-centre) — who/where, sharing */}
-			<div className="glass float-in" style={bar}>
-				<span className="muted" style={{ fontSize: 12 }}>房號</span>
-				<span className="code" style={{ fontSize: 19, color: 'var(--accent)', marginRight: 2 }}>{room}</span>
-				<button title="分享這間會議室:QR、房號、邀請連結" className="btn-accent" onClick={() => setShareOpen(true)}>分享 / QR</button>
-				<span className="muted" style={{ fontSize: 12 }} title={status === 'synced' ? '已即時連線' : status}>
-					{status === 'synced' ? '已連線' : status} · {shapes.length} 張
-				</span>
-			</div>
+			{/* top bar — desktop: centred room bar; mobile: one compact bar + ⋯ overflow menu */}
+			{mobile ? (
+				<>
+					<div className="glass float-in" style={{ position: 'fixed', top: 8, left: 8, right: 8, zIndex: 1000, display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', fontSize: 13 }}>
+						<span className="code" style={{ fontSize: 17, color: 'var(--accent)' }}>{room}</span>
+						<button className="btn-accent" style={{ padding: '5px 11px' }} onClick={() => setShareOpen(true)}>分享</button>
+						<span style={{ flex: 1 }} />
+						<span className="muted" style={{ fontSize: 11, whiteSpace: 'nowrap' }}>{status === 'synced' ? '已連線' : status}·{shapes.length}</span>
+						<button style={btn} title="更多" onClick={() => setMenuOpen((v) => !v)}>⋯</button>
+					</div>
+					{menuOpen && (
+						<div className="glass float-in" style={{ position: 'fixed', top: 54, right: 8, zIndex: 2100, display: 'flex', flexDirection: 'column', gap: 5, padding: 8, minWidth: 156 }} onClick={() => setMenuOpen(false)}>
+							<button className="btn-soft" onClick={() => setExportOpen(true)}>匯出 / 會議紀錄</button>
+							<button onClick={() => setSettingsOpen(true)}>⚙ 設定</button>
+							<button onClick={() => toggleTheme()}>{theme === 'dark' ? '☀ 亮色主題' : '☾ 暗色主題'}</button>
+							<button onClick={() => setView({ x: 0, y: 0, scale: 1 })}>回正視圖</button>
+							<button onClick={() => setGuide(true)}>? 使用說明</button>
+							<button className="btn-danger" onClick={() => { if (window.confirm('清空整個房間給所有人?')) clearAll() }}>清空房間</button>
+						</div>
+					)}
+				</>
+			) : (
+				<div className="glass float-in" style={bar}>
+					<span className="muted" style={{ fontSize: 12 }}>房號</span>
+					<span className="code" style={{ fontSize: 19, color: 'var(--accent)', marginRight: 2 }}>{room}</span>
+					<button title="分享這間會議室:QR、房號、邀請連結" className="btn-accent" onClick={() => setShareOpen(true)}>分享 / QR</button>
+					<span className="muted" style={{ fontSize: 12 }} title={status === 'synced' ? '已即時連線' : status}>
+						{status === 'synced' ? '已連線' : status} · {shapes.length} 張
+					</span>
+				</div>
+			)}
 
 			{/* canvas tools (left strip, Photoshop-style) */}
 			<div className="toolstrip float-in">
@@ -1577,15 +1600,17 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 				<button className="tool" disabled={!selectedId && !selectedConnId} title="刪除選取的便利貼或連線(Delete)" onClick={() => { if (selectedId) deleteSticky(selectedId); else if (selectedConnId) deleteConnector(selectedConnId) }}><Ico><path d="M3 6h18"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></Ico>刪除</button>
 			</div>
 
-			{/* app / view (top-right) — settings, theme, export, danger */}
-			<div className="glass float-in" style={appbar}>
-				<button title="匯出 / 輸出:會議摘要、Markdown、PNG、畫板存檔(可還原)" className="btn-soft" onClick={() => setExportOpen(true)}>匯出</button>
-				<button style={btn} title="設定:AI 雲端/本機、排列間距、自動重排" onClick={() => setSettingsOpen(true)}>⚙</button>
-				<button style={btn} title={theme === 'dark' ? '切換亮色主題' : '切換暗色主題'} onClick={toggleTheme}>{theme === 'dark' ? '☀' : '☾'}</button>
-				<button style={btn} title="視圖回到原點與原始縮放" onClick={() => setView({ x: 0, y: 0, scale: 1 })}>回正</button>
-				<button className="btn-danger" title="清空整個房間(會清掉所有人的板,請小心)" onClick={() => { if (window.confirm('清空整個房間給所有人?')) clearAll() }}>清空</button>
-				<button style={btn} title="使用說明 / 新手引導" onClick={() => setGuide(true)}>?</button>
-			</div>
+			{/* app / view (top-right) — desktop only; on mobile these live in the ⋯ menu */}
+			{!mobile && (
+				<div className="glass float-in" style={appbar}>
+					<button title="匯出 / 輸出:會議摘要、Markdown、PNG、畫板存檔(可還原)" className="btn-soft" onClick={() => setExportOpen(true)}>匯出</button>
+					<button style={btn} title="設定:AI 雲端/本機、排列間距、自動重排" onClick={() => setSettingsOpen(true)}>⚙</button>
+					<button style={btn} title={theme === 'dark' ? '切換亮色主題' : '切換暗色主題'} onClick={toggleTheme}>{theme === 'dark' ? '☀' : '☾'}</button>
+					<button style={btn} title="視圖回到原點與原始縮放" onClick={() => setView({ x: 0, y: 0, scale: 1 })}>回正</button>
+					<button className="btn-danger" title="清空整個房間(會清掉所有人的板,請小心)" onClick={() => { if (window.confirm('清空整個房間給所有人?')) clearAll() }}>清空</button>
+					<button style={btn} title="使用說明 / 新手引導" onClick={() => setGuide(true)}>?</button>
+				</div>
+			)}
 
 			{/* contextual color + delete popover for a selected sticky */}
 			{selectedId &&
@@ -1917,11 +1942,11 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 				{/* voice = the main way to get content onto the board */}
 				<button
 					className={`btn-rec${meeting ? ' live' : ''}`}
-						style={{ width: '100%', marginTop: 8, fontSize: 15, padding: '12px', fontWeight: 600 }}
+						style={{ width: '100%', marginTop: 8, fontSize: 15, padding: '13px', fontWeight: 600, display: 'flex', alignItems: 'center', justifyContent: 'center' }}
 					title="連續錄音:邊講邊整理,停頓會自動斷句上板;再按一次停止"
 					onClick={() => (meeting ? stopMeeting() : startMeeting())}
 				>
-					{meeting ? `■ 停止會議記錄（已整理 ${segCount} 段）` : '● 開始會議記錄'}
+					<span className="rec-dot" />{meeting ? `錄音中 · 已整理 ${segCount} 段　點此停止` : '開始會議記錄'}
 				</button>
 				{panelOpen && (
 					<>

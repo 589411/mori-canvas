@@ -177,4 +177,17 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .modal-in { animation: fadeScale 0.22s cubic-bezier(0.2, 0.8, 0.2, 1) both; }
 .live { animation: livePulse 1.6s ease-in-out infinite; }
 
-@media (max-width: 700px) { button, .btn { padding: 9px 13px; font-size: 14px; } }
+/* record indicator dot inside the record button: red circle = record, white square = stop */
+.rec-dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; background: #e11d48; margin-right: 9px; vertical-align: middle; flex: 0 0 auto; }
+.btn-rec.live .rec-dot { border-radius: 2px; background: #fff; }
+
+@media (max-width: 700px) {
+  button, .btn { padding: 9px 13px; font-size: 14px; }
+  /* tools become a compact icon-only row under the top bar, horizontally scrollable —
+     no longer a tall left column colliding with the bottom record panel */
+  .toolstrip { top: 58px; left: 8px; right: 8px; flex-direction: row; gap: 5px; overflow-x: auto; padding: 5px 7px; border-radius: 13px; background: var(--surface); box-shadow: 0 4px 16px rgba(28,26,23,0.1); scrollbar-width: none; }
+  .toolstrip::-webkit-scrollbar { display: none; }
+  .toolstrip .tool { flex: 0 0 auto; font-size: 0; gap: 0; padding: 9px; }
+  .toolstrip .tool svg { width: 20px; height: 20px; margin: 0; }
+  .tool-divider { width: 1px; height: 22px; margin: 0 2px; align-self: center; flex: 0 0 auto; }
+}
