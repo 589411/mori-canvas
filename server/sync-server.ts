@@ -552,18 +552,27 @@ app.post('/api/transcribe', rateLimit, express.raw({ type: () => true, limit: '2
 // Export the board as a Markdown meeting note (kind = sticky colour).
 const KIND_BY_COLOR: Record<string, string> = { yellow: '主題', green: '待辦', blue: '決議', red: '風險' }
 app.get('/api/export/:room', (req, res) => {
-	const doc = getRoom(req.params.room).doc
+	const room = getRoom(req.params.room)
+	const doc = room.doc
 	const shapes = [...doc.getMap('shapes').values()].filter((s: any) => s.type === 'sticky') as any[]
 	const conns = [...doc.getMap('connectors').values()] as any[]
-	const byKind: Record<string, string[]> = {}
-	for (const s of shapes) (byKind[KIND_BY_COLOR[s.color] || '其他'] ??= []).push(s.text)
-	let md = `# 會議白板:${req.params.room}\n\n`
-	for (const k of ['主題', '決議', '待辦', '風險', '其他']) {
-		if (byKind[k]?.length) md += `## ${k}\n${byKind[k].map((t) => `- ${t}`).join('\n')}\n\n`
+	const meta = boardMeta(room)
+	const bt = boardType(meta.type) // export reflects THIS board's type, not always 'meeting'
+	const named = (s: any) => (s.owner ? `(${s.owner})` : s.drawnBy && !['user', 'agent', 'voice', 'bot'].includes(s.drawnBy) ? `(${s.drawnBy})` : '')
+	const tagstr = (s: any) => (s.tags?.length ? ' ' + s.tags.map((t: string) => `#${t}`).join(' ') : '')
+	// group cards by this board type's colour meanings (e.g. meeting=主題/待辦…, org=最高層/主管…)
+	const order = ['blue', 'green', 'yellow', 'red']
+	const byCat: Record<string, string[]> = {}
+	for (const s of shapes) {
+		const cat = bt.colors[s.color] || '其他'
+		;(byCat[cat] ??= []).push(`- ${s.text}${named(s)}${tagstr(s)}`)
 	}
+	let md = `# ${bt.label}:${meta.topic || req.params.room}\n\n`
+	const cats = [...order.map((c) => bt.colors[c]).filter(Boolean), '其他']
+	for (const cat of cats) if (byCat[cat]?.length) md += `## ${cat}\n${byCat[cat].join('\n')}\n\n`
 	if (conns.length) {
 		const txt = (id: string) => shapes.find((s) => s.id === id)?.text ?? '?'
-		md += `## 關聯\n${conns.map((c) => `- ${txt(c.from)} → ${txt(c.to)}`).join('\n')}\n`
+		md += `## ${bt.edgeLabel}\n${conns.map((c) => `- ${txt(c.from)} → ${txt(c.to)}`).join('\n')}\n`
 	}
 	res.setHeader('Content-Type', 'text/markdown; charset=utf-8')
 	res.send(md)
