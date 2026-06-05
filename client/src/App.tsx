@@ -156,6 +156,13 @@ export default function App() {
 	const [status, setStatus] = useState('connecting')
 	const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight })
 	const [view, setView] = useState({ x: 0, y: 0, scale: 1 }) // canvas pan/zoom
+	const [theme, setTheme] = useState(() => (typeof document !== 'undefined' ? document.documentElement.getAttribute('data-theme') || 'light' : 'light'))
+	const toggleTheme = () => {
+		const next = theme === 'dark' ? 'light' : 'dark'
+		setTheme(next)
+		document.documentElement.setAttribute('data-theme', next)
+		try { localStorage.setItem('mc-theme', next) } catch {}
+	}
 	const [selectedId, setSelectedId] = useState<string | null>(null)
 	const [selectedConnId, setSelectedConnId] = useState<string | null>(null)
 	const [filter, setFilter] = useState<{ type: 'tag' | 'owner'; value: string } | null>(null)
@@ -885,7 +892,7 @@ export default function App() {
 				>
 					<div
 						className="glass modal-in"
-						style={{ background: 'rgba(253,251,247,0.98)', width: 'min(440px, 92vw)', maxHeight: '88vh', overflowY: 'auto', padding: '26px 24px 20px', borderRadius: 20 }}
+						style={{ background: 'var(--surface)', width: 'min(440px, 92vw)', maxHeight: '88vh', overflowY: 'auto', padding: '26px 24px 20px', borderRadius: 20 }}
 					>
 						<div className="code" style={{ fontSize: 30, color: 'var(--ink)' }}>共筆白板</div>
 						<div style={{ color: 'var(--ink-soft)', fontSize: 14, margin: '2px 0 18px' }}>開會時邊講,AI 幫你把重點整理成白板</div>
@@ -1285,7 +1292,7 @@ export default function App() {
 								border: '2px solid var(--accent)',
 								borderRadius: 6,
 								zIndex: 2000,
-								background: '#fff',
+								background: 'var(--surface)',
 							}}
 						/>
 					)
@@ -1350,7 +1357,7 @@ export default function App() {
 				</button>
 				<button
 					title="匯出 / 輸出:會議摘要、Markdown 紀錄、或白板圖片 (PNG)"
-					style={{ ...btn, background: '#fef3c7' }}
+					style={{ ...btn, background: 'var(--accent-soft)' }}
 					onClick={() => setExportOpen(true)}
 				>
 					匯出 / 輸出
@@ -1364,6 +1371,9 @@ export default function App() {
 				</button>
 				<button style={btn} title="設定:AI 用雲端(Groq)或本機、自動排列間距、是否自動重排" onClick={() => setSettingsOpen(true)}>
 					⚙ 設定
+				</button>
+				<button style={btn} title={theme === 'dark' ? '切換亮色主題' : '切換暗色主題'} onClick={toggleTheme}>
+					{theme === 'dark' ? '☀' : '☾'}
 				</button>
 				<button style={btn} title="視圖回到原點與原始縮放" onClick={() => setView({ x: 0, y: 0, scale: 1 })}>
 					回正
@@ -1457,7 +1467,7 @@ export default function App() {
 					onClick={() => setTypePickerOpen(false)}
 					style={{ position: 'fixed', inset: 0, zIndex: 3500, background: 'rgba(28,26,23,0.4)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
 				>
-					<div className="glass modal-in" onClick={(e) => e.stopPropagation()} style={{ background: 'rgba(253,251,247,0.98)', width: 'min(420px, 92vw)', maxHeight: '88vh', overflowY: 'auto', padding: 22, borderRadius: 18 }}>
+					<div className="glass modal-in" onClick={(e) => e.stopPropagation()} style={{ background: 'var(--surface)', width: 'min(420px, 92vw)', maxHeight: '88vh', overflowY: 'auto', padding: 22, borderRadius: 18 }}>
 						<div style={{ fontWeight: 700, fontSize: 16 }}>新增一張圖</div>
 						<div style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '4px 0 12px' }}>
 							一個會議可以有多張圖。開會切到新主題時 AI 會自動開對應的圖;這裡可手動加一張並選圖型。
@@ -1476,7 +1486,7 @@ export default function App() {
 									setNewFrameTitle('')
 									setTypePickerOpen(false)
 								}}
-								style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 8, padding: '10px 12px', background: 'rgba(255,255,255,0.6)', borderColor: 'var(--line)' }}
+								style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 8, padding: '10px 12px', background: 'var(--surface-soft)', borderColor: 'var(--line)' }}
 							>
 								<div style={{ fontWeight: 600, fontSize: 14, color: 'var(--ink)' }}>{t.label}</div>
 								<div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{t.blurb}</div>
@@ -1492,7 +1502,7 @@ export default function App() {
 					onClick={() => setSettingsOpen(false)}
 					style={{ position: 'fixed', inset: 0, zIndex: 3600, background: 'rgba(28,26,23,0.4)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
 				>
-					<div className="glass modal-in" onClick={(e) => e.stopPropagation()} style={{ background: 'rgba(253,251,247,0.98)', width: 'min(440px, 92vw)', maxHeight: '88vh', overflowY: 'auto', padding: 22, borderRadius: 18 }}>
+					<div className="glass modal-in" onClick={(e) => e.stopPropagation()} style={{ background: 'var(--surface)', width: 'min(440px, 92vw)', maxHeight: '88vh', overflowY: 'auto', padding: 22, borderRadius: 18 }}>
 						<div style={{ fontWeight: 700, fontSize: 16 }}>設定</div>
 						<div style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '4px 0 16px' }}>即時生效、不寫死。</div>
 
@@ -1609,7 +1619,7 @@ export default function App() {
 					onClick={() => setExportOpen(false)}
 					style={{ position: 'fixed', inset: 0, zIndex: 3600, background: 'rgba(28,26,23,0.4)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
 				>
-					<div className="glass modal-in" onClick={(e) => e.stopPropagation()} style={{ background: 'rgba(253,251,247,0.98)', width: 'min(420px, 92vw)', padding: 22, borderRadius: 18 }}>
+					<div className="glass modal-in" onClick={(e) => e.stopPropagation()} style={{ background: 'var(--surface)', width: 'min(420px, 92vw)', padding: 22, borderRadius: 18 }}>
 						<div style={{ fontWeight: 700, fontSize: 16 }}>匯出 / 輸出</div>
 						<div style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '4px 0 16px' }}>「畫板存檔」可完整還原;其餘是快照輸出(不能還原)。</div>
 						<div style={{ border: '1px solid var(--line)', borderRadius: 12, padding: '11px 12px', marginBottom: 12, background: 'rgba(124,58,237,0.06)' }}>
@@ -1777,7 +1787,7 @@ export default function App() {
 					<div
 						className="modal-in" onClick={(e) => e.stopPropagation()}
 						style={{
-							background: 'rgba(253,251,247,0.98)',
+							background: 'var(--surface)',
 							borderRadius: 18,
 							padding: 24,
 							width: 320,
