@@ -1436,7 +1436,7 @@ export default function App() {
 							</button>
 							<button
 								title="刪除這張 (Delete)"
-								style={{ color: '#b91c1c', padding: '4px 9px' }}
+								style={{ color: 'var(--live)', padding: '4px 9px' }}
 								onClick={() => {
 									deleteSticky(selectedId)
 									setSelectedId(null)
@@ -1719,17 +1719,8 @@ export default function App() {
 				</div>
 				{/* voice = the main way to get content onto the board */}
 				<button
-					className={meeting ? 'live' : undefined}
-					style={{
-						width: '100%',
-						marginTop: 8,
-						fontSize: 15,
-						padding: '12px',
-						fontWeight: 600,
-						background: meeting ? 'var(--live)' : 'var(--ink)',
-						color: '#fff',
-						borderColor: meeting ? 'var(--live)' : 'var(--ink)',
-					}}
+					className={`btn-rec${meeting ? ' live' : ''}`}
+						style={{ width: '100%', marginTop: 8, fontSize: 15, padding: '12px', fontWeight: 600 }}
 					title="連續錄音:邊講邊整理,停頓會自動斷句上板;再按一次停止"
 					onClick={() => (meeting ? stopMeeting() : startMeeting())}
 				>
@@ -1738,7 +1729,7 @@ export default function App() {
 				{panelOpen && (
 					<>
 						<button
-							style={{ ...btn, width: '100%', marginTop: 6, fontSize: 12, background: recording ? '#fecaca' : '#f3f4f6' }}
+							style={{ ...btn, width: '100%', marginTop: 6, fontSize: 12, ...(recording ? { background: 'var(--live)', color: '#fff', borderColor: 'var(--live)' } : {}) }}
 							title="只錄一段:按開始、講話、再按停止"
 							onClick={toggleRecord}
 							disabled={meeting}
@@ -1766,7 +1757,7 @@ export default function App() {
 						)}
 					</>
 				)}
-				{busy && <div style={{ marginTop: 6, fontSize: 12, color: '#444' }}>{busy}</div>}
+				{busy && <div style={{ marginTop: 6, fontSize: 12, color: 'var(--ink-soft)' }}>{busy}</div>}
 			</div>
 
 			{/* share modal: QR + 房號 + join-by-code */}
@@ -1777,7 +1768,7 @@ export default function App() {
 						position: 'fixed',
 						inset: 0,
 						zIndex: 3000,
-						background: 'rgba(0,0,0,0.45)',
+						background: 'var(--scrim)',
 						display: 'flex',
 						alignItems: 'center',
 						justifyContent: 'center',
@@ -1796,43 +1787,43 @@ export default function App() {
 						}}
 					>
 						<div style={{ display: 'flex', gap: 6, alignItems: 'center', marginBottom: 12 }}>
-							<span style={{ color: '#666', fontSize: 13, whiteSpace: 'nowrap' }}>你的名字</span>
+							<span style={{ color: 'var(--ink-soft)', fontSize: 13, whiteSpace: 'nowrap' }}>你的名字</span>
 							<input
 								value={myName}
 								onChange={(e) => setMyName(e.target.value.slice(0, 24))}
 								placeholder="會議裡顯示的名字"
-								style={{ flex: 1, font: '14px system-ui', padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
+								style={{ flex: 1, font: '14px system-ui', padding: '6px 8px', border: '1px solid var(--line)', borderRadius: 6 }}
 							/>
 						</div>
-						<div style={{ color: '#666', fontSize: 13 }}>用手機掃 QR,或輸入房號加入</div>
+						<div style={{ color: 'var(--ink-soft)', fontSize: 13 }}>用手機掃 QR,或輸入房號加入</div>
 						<div className="code" style={{ fontSize: 52, color: 'var(--accent)', margin: '6px 0 16px', lineHeight: 1 }}>{room}</div>
 						{qrUrl ? (
-							<img src={qrUrl} width={240} height={240} alt="QR" style={{ border: '1px solid #eee', borderRadius: 8 }} />
+							<img src={qrUrl} width={240} height={240} alt="QR" style={{ border: '1px solid var(--line)', borderRadius: 8 }} />
 						) : (
-							<div style={{ height: 240, lineHeight: '240px', color: '#aaa' }}>產生 QR 中…</div>
+							<div style={{ height: 240, lineHeight: '240px', color: 'var(--ink-soft)' }}>產生 QR 中…</div>
 						)}
 						<div style={{ display: 'flex', gap: 6, marginTop: 12 }}>
 							<input
 								readOnly
 								value={shareUrl}
 								onFocus={(e) => e.currentTarget.select()}
-								style={{ flex: 1, font: '12px system-ui', padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6 }}
+								style={{ flex: 1, font: '12px system-ui', padding: '6px 8px', border: '1px solid var(--line)', borderRadius: 6 }}
 							/>
 							<button
-								style={{ ...btn, background: '#dbeafe' }}
+								style={{ ...btn, background: 'var(--accent-soft)' }}
 								onClick={() => navigator.clipboard?.writeText(shareUrl)}
 							>
 								複製連結
 							</button>
 						</div>
-						<hr style={{ margin: '16px 0', border: 0, borderTop: '1px solid #eee' }} />
+						<hr style={{ margin: '16px 0', border: 0, borderTop: '1px solid var(--line)' }} />
 						<div style={{ display: 'flex', gap: 6 }}>
 							<input
 								value={joinCode}
 								onChange={(e) => setJoinCode(e.target.value)}
 								onKeyDown={(e) => e.key === 'Enter' && joinRoom()}
 								placeholder="輸入房號加入別房…"
-								style={{ flex: 1, font: '14px system-ui', padding: '6px 8px', border: '1px solid #ddd', borderRadius: 6, textTransform: 'uppercase' }}
+								style={{ flex: 1, font: '14px system-ui', padding: '6px 8px', border: '1px solid var(--line)', borderRadius: 6, textTransform: 'uppercase' }}
 							/>
 							<button style={btn} onClick={joinRoom}>
 								加入
@@ -1840,11 +1831,11 @@ export default function App() {
 						</div>
 						{roomList.length > 0 && (
 							<div style={{ marginTop: 14, textAlign: 'left', maxHeight: 140, overflowY: 'auto' }}>
-								<div style={{ color: '#666', fontSize: 12, marginBottom: 4 }}>進行中的房間</div>
+								<div style={{ color: 'var(--ink-soft)', fontSize: 12, marginBottom: 4 }}>進行中的房間</div>
 								{roomList.map((r) => (
 									<div key={r.id} style={{ display: 'flex', alignItems: 'center', gap: 6, padding: '3px 0' }}>
 										<span style={{ flex: 1, fontWeight: r.id === room ? 700 : 400 }}>
-											{r.id} <span style={{ color: '#999', fontSize: 12 }}>· {r.online}人 · {r.shapes}張</span>
+											{r.id} <span style={{ color: 'var(--ink-soft)', fontSize: 12 }}>· {r.online}人 · {r.shapes}張</span>
 										</span>
 										{r.id !== room && (
 											<button
@@ -1859,7 +1850,7 @@ export default function App() {
 							</div>
 						)}
 						<div style={{ display: 'flex', gap: 6, marginTop: 14 }}>
-							<button style={{ ...btn, flex: 1, color: '#b91c1c' }} onClick={endThisRoom}>
+							<button style={{ ...btn, flex: 1, color: 'var(--live)' }} onClick={endThisRoom}>
 								結束此房(清空)
 							</button>
 							<button style={{ ...btn, flex: 1 }} onClick={() => setShareOpen(false)}>
