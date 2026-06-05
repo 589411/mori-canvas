@@ -9,7 +9,7 @@
 一個**自架、零授權成本(全 MIT)**的會議白板:**講話 / 貼逐字稿 → AI agent 自動整理成便利貼 + 連線 → 多人即時協作的白板**。人也能在同一張板上拖拉、改字、連線、刪除,所有動作即時同步。
 
 ```
-會議語音 ──mori-ear STT──▶ 逐字稿 ──Groq/qwen3 agent──▶ 便利貼+連線 ──yjs──▶ 多人 live 白板
+會議語音 ──STT(雲端 Groq / 本機 whisper)──▶ 逐字稿 ──AI(Groq gpt-oss-120b / 本機 qwen3)──▶ 便利貼+連線 ──yjs──▶ 多人 live 白板
                                                           人也能在同一張板上 拖拉 / 改字 / 連線 / 刪除
 ```
 
@@ -42,7 +42,7 @@
 所以 **理解與整理都在伺服端(主機)做,做完同步回網頁**;瀏覽器只負責「錄音 + 畫」——這也是同事零安裝的原因。判斷指令靠的是 **LLM 的理解,不是關鍵字比對**:例如「交給阿明做」會被當成指派(沒講「指派」)、「改寫成線上掛號」走改文字、「改成風險」走改類型。貼現成逐字稿走的是同一條路,只是跳過第 2 步 STT。
 
 - **AI**:Groq `gpt-oss-120b`(本機 Ollama `qwen3` 後備),key/model 讀共用 `~/.mori/config.json`。
-- **STT**:mori-ear(本機 whisper-server 或 Groq Whisper)。
+- **STT**:三條路(設定頁切)—— mori-ear / 雲端 Groq Whisper / 本機 whisper-server;輸出一律程式硬轉繁體(opencc),不靠模型自律。
 - **即時同步**:自寫 yjs sync server(不靠任何雲服務)。
 - **獨立可跑(不依賴 AgentOS)**,但**可選擇性**裝進 AgentOS 當 body-part(`meeting.visualize` http-service,見「部署」)。跟 mori 生態的關聯=`mori-ear` CLI + 共用 config;其餘是獨立 FOSS app。
 
@@ -256,13 +256,13 @@ curl -X POST localhost:1334/api/visualize -H 'Content-Type: application/json' \
 
 ## 踩過的雷(寫給下一棒)
 
-1. **`@y/websocket-server`(yjs v3 官方推薦 server)不能用 classic yjs client 寫** —— 它依賴 fork `@y/y`,client→server 寫會噴 `store.getClock is not a function`。解法:自寫 classic-yjs server(本 repo `sync-server.ts`)。
-2. **非 ASCII 房名要 `decodeURIComponent`**:WS 路徑沒 decode 而 `/api/:room` 被 express 自動 decode → `會議室甲` 變成兩個房,曾害「agent 說 6 張卻畫面空白」。
+1. **`@y/websocket-server`(yjs v3 官方推薦 server)不能用 classic yjs client 寫** —— 它依賴 fork `@y/y`,client→server 寫會噴 `store.getClock is not a function`。解法:用 `yrs` + `yrs-warp`(Rust)自寫 classic-yjs server(`server-rs/src/sync.rs`),跟 yjs JS client 互通。
+2. **非 ASCII 房名要 `decodeURIComponent`**:WS 路徑沒 decode 而 `/api/:room` 被 HTTP 路由自動 decode → `會議室甲` 變成兩個房,曾害「agent 說 6 張卻畫面空白」。
 3. **手機錄音要 HTTPS**:`http://<區網IP>` 是不安全來源,瀏覽器擋 `getUserMedia`。所以才有「公司區網版」的自簽 HTTPS。
 4. **React StrictMode + cleanup `provider.destroy()` 會殺連線** → 本 spike 拿掉 StrictMode。
 5. **agent JSON**:gpt-oss/qwen3 會夾 `<think>`/圍欄,要先剝再取外層 `{...}`;qwen3 記得 `think:false`;connector 用 `{from,to}` 別用 `[[a,b]]`(模型會黏成 `["01"]`)。
 6. **mori-ear**:`--input` batch 不卡 single-instance lock(daemon 在跑也能用);HTTP `/inference` 只吃 WAV,CLI 才吃 webm/mp3,所以走 CLI 最通用。
-7. **server 重啟丟資料**:debounce 寫盤 + `tsx watch`/Ctrl-C → 要 SIGTERM/SIGINT flush(已做)。
+7. **server 重啟丟資料**:debounce 寫盤,Ctrl-C / 重啟 → 要 SIGTERM/SIGINT flush(已做)。
 
 ---
 
@@ -279,4 +279,4 @@ curl -X POST localhost:1334/api/visualize -H 'Content-Type: application/json' \
 ## 現況 / 授權
 
 - **現況**:已公開在 GitHub([yazelin/mori-canvas](https://github.com/yazelin/mori-canvas),MIT),可一鍵部署到 Render(社群試玩版)或自架。後端純 Rust 單一 binary,房間持久化在 `.data/<房號>.bin`(主機關了再開還在;Render 免費方案休眠/重部署會清掉,想留就「下載畫板檔」)。
-- **授權**:後端 Rust(yrs / yrs-warp / warp / reqwest / tokio,MIT/Apache-2.0)、前端(yjs / konva / react-konva / react / vite,全 MIT)—— 可閉源、可賣,**沒有 tldraw 那顆 production license**。語音那塊綁 `mori-ear`(你的工具),搬到別的機器要自己接 STT。
+- **授權**:後端 Rust(yrs / yrs-warp / warp / reqwest / tokio,MIT/Apache-2.0)、前端(yjs / konva / react-konva / react / vite,全 MIT)—— 可閉源、可賣,**沒有 tldraw 那顆 production license**。語音(STT)有三條路 —— `mori-ear` / 雲端 Groq Whisper / 本機 whisper-server,**不裝 mori-ear 也能跑**(填 Groq key 走雲端即可)。
