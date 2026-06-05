@@ -71,11 +71,21 @@ async function callOllama(messages: Msg[], json: boolean): Promise<string> {
 	return content
 }
 
+// runtime-settable: cloud-first (Groq) vs local-only (qwen3). Default from env; the
+// page's settings can flip it live via setLocalOnly().
+let localOnly = process.env.LLM_LOCAL_ONLY === '1'
+export function setLocalOnly(v: boolean) {
+	localOnly = v
+}
+export function llmStatus(): { localOnly: boolean; groqKey: boolean } {
+	return { localOnly, groqKey: !!groqKey() }
+}
+
 /** Try Groq first; on any failure fall back to local Ollama. */
 export async function chat(messages: Msg[], opts: { json?: boolean } = {}): Promise<{ text: string; provider: string }> {
 	const json = !!opts.json
-	// LLM_LOCAL_ONLY=1 → never call the cloud; meeting transcripts stay on the LAN.
-	if (process.env.LLM_LOCAL_ONLY === '1') {
+	// local-only → never call the cloud; meeting transcripts stay on the LAN.
+	if (localOnly) {
 		return { text: await callOllama(messages, json), provider: 'ollama(local-only)' }
 	}
 	try {

@@ -26,7 +26,11 @@ import { join as pathJoin } from 'node:path'
 import { planAgent, planCardEdit, type BoardPlan, type ExistingCard, type AgentCommand } from './agent.ts'
 import { boardType, BOARD_TYPES, DEFAULT_BOARD_TYPE } from './board-types.ts'
 import { transcribe } from './stt.ts'
-import { chat } from './llm.ts'
+import { chat, setLocalOnly, llmStatus } from './llm.ts'
+
+// runtime settings adjustable from the page's ⚙ (not hardcoded). Global to the server.
+const SETTINGS = { spacing: 1, autoTidy: true }
+const sp = () => SETTINGS.spacing
 
 const PORT = 1234
 const messageSync = 0
@@ -517,7 +521,7 @@ async function runAgentTurn(roomName: string, transcript: string, by: string): P
 			frameLabel = `開新圖:${boardType(f.type).label}`
 		}
 		const r = await applyPlan(roomName, result.plan, by, existing.map((e) => e.id), frameId)
-		if (r.ids.length || r.connectorsDrawn) tidyBoard(room) // re-flow every frame into its layout
+		if (SETTINGS.autoTidy && (r.ids.length || r.connectorsDrawn)) tidyBoard(room) // re-flow every frame into its layout
 		return { provider, intent: 'content', added: result.plan.stickies, ids: r.ids, stickies: r.ids.length, connectors: r.connectorsDrawn, frameLabel }
 	})
 }
@@ -750,7 +754,7 @@ function colPositions(cards: any[], ox: number, oy: number): Pos {
 		const col = columnOf(s.color)
 		const row = rowByCol[col] ?? 0
 		rowByCol[col] = row + 1
-		pos.set(s.id, { x: ox + col * (W + COL_GAP), y: oy + row * (H + ROW_GAP) })
+		pos.set(s.id, { x: ox + col * (W + COL_GAP * sp()), y: oy + row * (H + ROW_GAP * sp()) })
 	}
 	return pos
 }
@@ -802,8 +806,8 @@ function treePositions(cards: any[], conns: any[], ox: number, oy: number, dir: 
 		if (!byLevel.has(lv)) byLevel.set(lv, [])
 		byLevel.get(lv)!.push(id)
 	}
-	const GX = 250
-	const GY = 240
+	const GX = W + 50 * sp()
+	const GY = H + 40 * sp()
 	for (const [lv, list] of byLevel)
 		list.forEach((id, i) => {
 			pos.set(id, dir === 'LR' ? { x: ox + lv * GX, y: oy + i * GY } : { x: ox + i * GX, y: oy + lv * GY })
@@ -856,7 +860,7 @@ function radialPositions(cards: any[], conns: any[], ox: number, oy: number): Po
 		}
 	}
 	assign(center, -Math.PI / 2, (3 * Math.PI) / 2)
-	const RING = 240
+	const RING = 200 + 40 * sp()
 	const maxLv = Math.max(0, ...[...level.values()])
 	const cx = ox + RING * maxLv
 	const cy = oy + RING * maxLv
@@ -872,11 +876,11 @@ function quadrantPositions(cards: any[], ox: number, oy: number): Pos {
 	const pos: Pos = new Map()
 	const g: Record<string, any[]> = { green: [], yellow: [], blue: [], red: [] }
 	for (const s of cards) (g[s.color] || g.green).push(s)
-	const GY = 24
+	const GY = 24 * sp()
 	const topRows = Math.max(g.green.length, g.yellow.length)
 	const botY = oy + topRows * (H + GY) + 80
 	const leftX = ox
-	const rightX = ox + W + 80
+	const rightX = ox + W + 80 * sp()
 	const place = (arr: any[], x: number, y0: number) => arr.forEach((s, i) => pos.set(s.id, { x, y: y0 + i * (H + GY) }))
 	place(g.green, leftX, oy)
 	place(g.yellow, rightX, oy)
@@ -914,8 +918,8 @@ function fishbonePositions(cards: any[], conns: any[], ox: number, oy: number): 
 		byLevel.get(lv)!.push(id)
 	}
 	const maxLv = Math.max(...[...level.values()])
-	const GX = 250
-	const GY = 230
+	const GX = W + 50 * sp()
+	const GY = H + 30 * sp()
 	let maxOff = 1
 	for (const [lv, list] of byLevel) if (lv > 0) maxOff = Math.max(maxOff, Math.ceil(list.length / 2))
 	const spineY = oy + maxOff * GY
@@ -960,8 +964,8 @@ function ganttPositions(cards: any[], conns: any[], ox: number, oy: number): Pos
 		const o = byId.get(id).owner || '未指派'
 		if (!rowOf.has(o)) rowOf.set(o, rowOf.size)
 	}
-	const GX = W + 40
-	const GY = H + 30
+	const GX = W + 40 * sp()
+	const GY = H + 30 * sp()
 	order.forEach((id, col) => {
 		const o = byId.get(id).owner || '未指派'
 		pos.set(id, { x: ox + col * GX, y: oy + (rowOf.get(o) || 0) * GY })
@@ -1055,6 +1059,15 @@ app.post('/api/rooms/:room/meta', (req, res) => {
 		if (req.body?.topic !== undefined) m.set('topic', String(req.body.topic).slice(0, 80))
 	})
 	res.json({ ok: true, ...boardMeta(room) })
+})
+
+// page settings: AI processing (cloud/local) + auto-arrange tuning (not hardcoded)
+app.get('/api/settings', (_req, res) => res.json({ ok: true, ...llmStatus(), spacing: SETTINGS.spacing, autoTidy: SETTINGS.autoTidy }))
+app.post('/api/settings', (req, res) => {
+	if (typeof req.body?.localOnly === 'boolean') setLocalOnly(req.body.localOnly)
+	if (typeof req.body?.spacing === 'number') SETTINGS.spacing = Math.min(2, Math.max(0.6, req.body.spacing))
+	if (typeof req.body?.autoTidy === 'boolean') SETTINGS.autoTidy = req.body.autoTidy
+	res.json({ ok: true, ...llmStatus(), spacing: SETTINGS.spacing, autoTidy: SETTINGS.autoTidy })
 })
 
 // frames = the diagrams on a meeting's canvas

@@ -181,6 +181,8 @@ export default function App() {
 	const [newFrameTitle, setNewFrameTitle] = useState('')
 	const [exportOpen, setExportOpen] = useState(false)
 	const [pngTransparent, setPngTransparent] = useState(false)
+	const [settingsOpen, setSettingsOpen] = useState(false)
+	const [settings, setSettings] = useState({ localOnly: false, groqKey: true, spacing: 1, autoTidy: true })
 	const [subtitle, setSubtitle] = useState('') // transient STT caption (UX feedback)
 	const subtitleTimer = useRef<any>(null)
 
@@ -248,6 +250,17 @@ export default function App() {
 		fetch(`${SYNC_HTTP}/api/rooms/${encodeURIComponent(room)}/tidy`, { method: 'POST' })
 			.then(() => setBusy('已依各圖的板型重新排列'))
 			.catch(() => setBusy('排列失敗'))
+	}
+	async function saveSettings(patch: Partial<typeof settings>) {
+		const r = await fetch(`${SYNC_HTTP}/api/settings`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify(patch),
+		})
+			.then((x) => x.json())
+			.catch(() => null)
+		if (r?.ok) setSettings({ localOnly: r.localOnly, groqKey: r.groqKey, spacing: r.spacing, autoTidy: r.autoTidy })
+		if (patch.spacing !== undefined) tidy() // re-arrange so the new spacing shows immediately
 	}
 	// set this board's type/topic (server-side, authoritative) then re-arrange
 	async function setBoardType(key: string, topic?: string) {
@@ -386,6 +399,12 @@ export default function App() {
 	const [, setFontReady] = useState(false)
 	useEffect(() => {
 		;(document as any).fonts?.ready.then(() => setFontReady(true))
+	}, [])
+	useEffect(() => {
+		fetch(`${SYNC_HTTP}/api/settings`)
+			.then((x) => x.json())
+			.then((r) => r?.ok && setSettings({ localOnly: r.localOnly, groqKey: r.groqKey, spacing: r.spacing, autoTidy: r.autoTidy }))
+			.catch(() => {})
 	}, [])
 
 	useEffect(() => {
@@ -1264,6 +1283,9 @@ export default function App() {
 				>
 					自動排列
 				</button>
+				<button style={btn} title="設定:AI 用雲端(Groq)或本機、自動排列間距、是否自動重排" onClick={() => setSettingsOpen(true)}>
+					⚙ 設定
+				</button>
 				<button style={btn} title="視圖回到原點與原始縮放" onClick={() => setView({ x: 0, y: 0, scale: 1 })}>
 					回正
 				</button>
@@ -1381,6 +1403,67 @@ export default function App() {
 								<div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{t.blurb}</div>
 							</button>
 						))}
+					</div>
+				</div>
+			)}
+
+			{/* settings dialog */}
+			{settingsOpen && (
+				<div
+					onClick={() => setSettingsOpen(false)}
+					style={{ position: 'fixed', inset: 0, zIndex: 3600, background: 'rgba(28,26,23,0.4)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+				>
+					<div className="glass modal-in" onClick={(e) => e.stopPropagation()} style={{ background: 'rgba(253,251,247,0.98)', width: 'min(440px, 92vw)', maxHeight: '88vh', overflowY: 'auto', padding: 22, borderRadius: 18 }}>
+						<div style={{ fontWeight: 700, fontSize: 16 }}>設定</div>
+						<div style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '4px 0 16px' }}>即時生效、不寫死。</div>
+
+						<div style={{ fontWeight: 600, fontSize: 14, marginBottom: 6 }}>AI 處理</div>
+						<div style={{ display: 'flex', gap: 8, marginBottom: 4 }}>
+							<button
+								disabled={!settings.groqKey}
+								onClick={() => saveSettings({ localOnly: false })}
+								style={{ flex: 1, ...(!settings.localOnly ? { background: 'var(--accent-soft)', borderColor: 'var(--accent)', color: 'var(--accent)' } : {}) }}
+							>
+								雲端 Groq{!settings.groqKey ? '(無 key)' : ''}
+							</button>
+							<button
+								onClick={() => saveSettings({ localOnly: true })}
+								style={{ flex: 1, ...(settings.localOnly ? { background: 'var(--accent-soft)', borderColor: 'var(--accent)', color: 'var(--accent)' } : {}) }}
+							>
+								本機 qwen3
+							</button>
+						</div>
+						<div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 18 }}>
+							{settings.localOnly ? '逐字稿與內容只用本機模型、不出網(較慢)。' : '用雲端 Groq(快,需 API key);連不到時自動退回本機。'}
+						</div>
+
+						<div style={{ fontWeight: 600, fontSize: 14, marginBottom: 6 }}>自動排列間距</div>
+						<div style={{ display: 'flex', gap: 8, marginBottom: 18 }}>
+							{(
+								[
+									['緊湊', 0.7],
+									['標準', 1],
+									['寬鬆', 1.4],
+								] as [string, number][]
+							).map(([label, v]) => (
+								<button
+									key={label}
+									onClick={() => saveSettings({ spacing: v })}
+									style={{ flex: 1, ...(Math.abs(settings.spacing - v) < 0.05 ? { background: 'var(--accent-soft)', borderColor: 'var(--accent)', color: 'var(--accent)' } : {}) }}
+								>
+									{label}
+								</button>
+							))}
+						</div>
+
+						<label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 18, cursor: 'pointer', fontSize: 13 }}>
+							<input type="checkbox" checked={settings.autoTidy} onChange={(e) => saveSettings({ autoTidy: e.target.checked })} />
+							AI 加完內容後自動重排(關掉的話卡片留原地,要自己按「自動排列」)
+						</label>
+
+						<button style={{ width: '100%' }} onClick={() => setSettingsOpen(false)}>
+							關閉
+						</button>
 					</div>
 				</div>
 			)}
