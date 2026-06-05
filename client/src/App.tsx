@@ -19,11 +19,11 @@ type Sticky = {
 type Connector = { id: string; from: string; to: string }
 
 const COLORS: Record<string, string> = {
-	yellow: '#f4d279', // topic
-	green: '#a9d6a0', // todo
-	blue: '#9ec1ea', // decision
-	red: '#efab9f', // risk
-	note: '#ddd1f1', // 備註 — annotation, addable to any diagram (lavender, off the 4 kinds)
+	yellow: '#f7e3a6', // topic — soft pastel
+	green: '#c4e3bc', // todo
+	blue: '#bdd6f1', // decision
+	red: '#f3c8be', // risk
+	note: '#e7e0f5', // 備註 — annotation, addable to any diagram (pale lavender, off the 4 kinds)
 }
 // a darker tint of each, for the little "kind" accent dot on a card
 const KIND_ACCENT: Record<string, string> = {
@@ -124,7 +124,7 @@ function resolveRoom(): string {
 
 const ACCENT = '#b4530a'
 // lighten a #rrggbb toward white (for the soft top of the sticky gradient)
-function lighten(hex: string, amt = 0.16): string {
+function lighten(hex: string, amt = 0.09): string {
 	const m = /^#?([0-9a-f]{6})$/i.exec(hex)
 	if (!m) return hex
 	const n = parseInt(m[1], 16)
@@ -1465,7 +1465,7 @@ export default function App() {
 			{typePickerOpen && (
 				<div
 					onClick={() => setTypePickerOpen(false)}
-					style={{ position: 'fixed', inset: 0, zIndex: 3500, background: 'rgba(28,26,23,0.4)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+					style={{ position: 'fixed', inset: 0, zIndex: 3500, background: 'var(--scrim)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
 				>
 					<div className="glass modal-in" onClick={(e) => e.stopPropagation()} style={{ background: 'var(--surface)', width: 'min(420px, 92vw)', maxHeight: '88vh', overflowY: 'auto', padding: 22, borderRadius: 18 }}>
 						<div style={{ fontWeight: 700, fontSize: 16 }}>新增一張圖</div>
@@ -1500,7 +1500,7 @@ export default function App() {
 			{settingsOpen && (
 				<div
 					onClick={() => setSettingsOpen(false)}
-					style={{ position: 'fixed', inset: 0, zIndex: 3600, background: 'rgba(28,26,23,0.4)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+					style={{ position: 'fixed', inset: 0, zIndex: 3600, background: 'var(--scrim)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
 				>
 					<div className="glass modal-in" onClick={(e) => e.stopPropagation()} style={{ background: 'var(--surface)', width: 'min(440px, 92vw)', maxHeight: '88vh', overflowY: 'auto', padding: 22, borderRadius: 18 }}>
 						<div style={{ fontWeight: 700, fontSize: 16 }}>設定</div>
@@ -1617,7 +1617,7 @@ export default function App() {
 			{exportOpen && (
 				<div
 					onClick={() => setExportOpen(false)}
-					style={{ position: 'fixed', inset: 0, zIndex: 3600, background: 'rgba(28,26,23,0.4)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+					style={{ position: 'fixed', inset: 0, zIndex: 3600, background: 'var(--scrim)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
 				>
 					<div className="glass modal-in" onClick={(e) => e.stopPropagation()} style={{ background: 'var(--surface)', width: 'min(420px, 92vw)', padding: 22, borderRadius: 18 }}>
 						<div style={{ fontWeight: 700, fontSize: 16 }}>匯出 / 輸出</div>
@@ -1626,7 +1626,7 @@ export default function App() {
 							<div style={{ fontWeight: 600, fontSize: 14 }}>畫板存檔(可還原)</div>
 							<div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 8 }}>存成 .json,完整保留卡片/連線/圖框,匯入即還原。也可把檔案傳給別人匯入接著討論、再回傳。</div>
 							<div style={{ display: 'flex', gap: 8 }}>
-								<button style={{ flex: 1, background: 'var(--ink)', color: '#fff', borderColor: 'var(--ink)' }}
+								<button style={{ flex: 1, background: 'var(--ink)', color: 'var(--bg)', borderColor: 'var(--ink)' }}
 									onClick={() => { exportBoard(); setExportOpen(false) }}>下載畫板檔</button>
 								<button style={{ flex: 1 }} onClick={() => pickAndImportBoard()}>匯入還原…</button>
 							</div>
@@ -1662,7 +1662,7 @@ export default function App() {
 								</label>
 							</div>
 							<button
-								style={{ width: '100%', background: 'var(--ink)', color: '#fff', borderColor: 'var(--ink)' }}
+								style={{ width: '100%', background: 'var(--ink)', color: 'var(--bg)', borderColor: 'var(--ink)' }}
 								onClick={() => {
 									exportPng(pngTransparent)
 									setExportOpen(false)
