@@ -4,19 +4,23 @@
  * (strips <think> blocks / code fences, then takes the outer {...}).
  */
 import { chat } from './llm.ts'
-import { boardType as resolveBoardType } from './board-types.ts'
+import { boardType as resolveBoardType, typesBrief } from './board-types.ts'
 
 export type StickyPlan = { text: string; color: string; kind?: string; owner?: string; tags?: string[] }
 export type StickyUpdate = { index: number; text?: string; color?: string }
+// where this batch of content goes: an existing frame (by index) or a brand-new one
+export type FrameTarget = { index?: number; newType?: string; newTitle?: string }
 export type BoardPlan = {
 	stickies: StickyPlan[]
 	connectors: [number, number][]
 	updates: StickyUpdate[] // edit existing cards (by their index in the shown list)
 	deletes: number[] // remove existing cards (by index)
+	frame?: FrameTarget // which diagram on the canvas this content belongs to
 }
 
 // what the agent sees about the current board (so it "knows the settings")
-export type ExistingCard = { id: string; text: string; color: string; owner?: string; tags?: string[] }
+export type ExistingCard = { id: string; text: string; color: string; owner?: string; tags?: string[]; frameId?: string }
+export type FrameInfo = { id: string; title: string; type: string }
 
 // a spoken instruction the agent recognised (vs. meeting content)
 export type AgentCommand =
@@ -56,7 +60,15 @@ const SYSTEM = `你是會議白板助手。每次收到「使用者這段話」+
 index 一律用下方「目前白板」清單的索引(找最符合使用者描述的那張)。
 注意:「改成<某類型>」(主題/待辦/決議/風險)用 recolor;「改成/改寫成<某段新文字>」用 edit。
 
-【若是 content】輸出 { "intent":"content", "stickies":[ { "text":"<繁中短語,最多14字>", "color":"yellow|green|blue|red", "owner":"<可省略>", "tags":["<標籤>"] } ], "connectors":[ { "from":<索引>, "to":<索引> } ], "updates":[...], "deletes":[...] }
+【若是 content】輸出 { "intent":"content", "frame":<見下>, "stickies":[ { "text":"<繁中短語,最多14字>", "color":"yellow|green|blue|red", "owner":"<可省略>", "tags":["<標籤>"] } ], "connectors":[ { "from":<索引>, "to":<索引> } ], "updates":[...], "deletes":[...] }
+
+【frame —— 這段內容要畫進哪張圖】一個會議的畫布上可以有多張圖(frame)。先判斷這段內容屬於哪張圖:
+- 屬於某張現有圖框: "frame": <圖框索引(整數)>
+- 是新主題、或需要不同的圖型(目前沒有合適的圖框): "frame": { "new": { "type": "<板型>", "title": "<該圖標題,繁中短>" } }
+  板型 type 可選:meeting(會議重點)/orgchart(組織)/flow(流程)/architecture(系統架構)/mindmap(心智圖)/kanban(看板)/swot(SWOT)/timeline(時間軸)。挑最貼這段內容的。
+- 沒有任何圖框時:第一段內容一定要開新圖(用 new)。
+- updates/deletes 仍用既有卡的全域索引(不分圖框)。新 stickies 與 connectors 的索引接在既有卡之後。
+
 content 規則:
 - **卡片的分類、配色(color)、連線的方向與意義、owner/tags 的用途,一律依使用者訊息中的【板型說明】解讀。** 板型說明會告訴你每個顏色代表什麼、連線 from→to 代表什麼。
 - 每次最多 6 張。text 是精簡繁中短語,別超過 14 字。配色直接給 color(yellow/green/blue/red);會議板也可用 kind(topic=黃/todo=綠/decision=藍/risk=紅)。
@@ -130,7 +142,15 @@ function parseContentPlan(obj: any, existingCount: number): BoardPlan {
 	const deletes: number[] = (Array.isArray(obj.deletes) ? obj.deletes : [])
 		.map(toIdx)
 		.filter((i: number) => Number.isInteger(i) && i >= 0 && i < existingCount)
-	return { stickies, connectors, updates, deletes }
+	let frame: FrameTarget | undefined
+	const fr = obj.frame
+	if (typeof fr === 'number' && Number.isInteger(fr) && fr >= 0) frame = { index: fr }
+	else if (fr && typeof fr === 'object') {
+		if (fr.new && typeof fr.new === 'object' && typeof fr.new.type === 'string')
+			frame = { newType: fr.new.type, newTitle: typeof fr.new.title === 'string' ? fr.new.title.slice(0, 24) : '' }
+		else if (Number.isInteger(fr.index)) frame = { index: fr.index }
+	}
+	return { stickies, connectors, updates, deletes, frame }
 }
 
 function sanitizeCommand(c: any, existingCount: number): AgentCommand | null {
@@ -204,29 +224,35 @@ const KIND_ZH: Record<string, string> = { yellow: '主題', green: '待辦', blu
 export async function planAgent(
 	transcript: string,
 	existing: ExistingCard[] = [],
-	typeKey?: string,
-	topic?: string
+	topic?: string,
+	frames: FrameInfo[] = []
 ): Promise<{ result: AgentResult; provider: string }> {
-	const bt = resolveBoardType(typeKey)
-	const typeBlock = `\n\n【板型說明】(${bt.label})${bt.hint}${topic ? `\n這張板的主題:「${topic}」,整理時聚焦在這個主題。` : ''}`
+	const frameIdx = new Map(frames.map((f, i) => [f.id, i]))
+	const topicBlock = topic ? `\n會議主題:「${topic}」` : ''
+	const framesBlock = frames.length
+		? `\n\n目前畫布上的圖框(frame,content 用 frame 欄指定要畫進哪張):\n` +
+			frames.map((f, i) => `  ${i}: [${resolveBoardType(f.type).label}] ${f.title}`).join('\n')
+		: `\n\n目前畫布上沒有任何圖框(content 的第一段請用 "frame":{"new":{...}} 開一張新圖)。`
+	const refBlock = `\n\n【板型對照表】(依你選的 frame 的板型,套用對應的配色與連線意義)\n${typesBrief()}`
 	const existingBlock = existing.length
-		? `\n\n目前白板(索引 0..${existing.length - 1}):\n` +
+		? `\n\n目前所有便利貼(全域索引 0..${existing.length - 1}):\n` +
 			existing
 				.map((c, i) => {
+					const fi = c.frameId != null && frameIdx.has(c.frameId) ? `(圖框${frameIdx.get(c.frameId)}) ` : ''
 					const meta = [KIND_ZH[c.color] || c.color]
 					if (c.owner) meta.push(`負責:${c.owner}`)
 					if (c.tags?.length) meta.push('#' + c.tags.join(' #'))
-					return `${i}. [${meta.join(' ')}] ${c.text}`
+					return `  ${i}. ${fi}[${meta.join(' ')}] ${c.text}`
 				})
 				.join('\n') +
-			`\n(content 模式時,你新增的便利貼索引從 ${existing.length} 開始)`
+			`\n(新增便利貼索引從 ${existing.length} 開始)`
 		: ''
 	const { text, provider } = await chat(
 		[
 			{ role: 'system', content: SYSTEM },
 			{
 				role: 'user',
-				content: `使用者這段話(三引號內,可能是會議內容、也可能是給你的指令):\n"""\n${transcript}\n"""${typeBlock}${existingBlock}`,
+				content: `使用者這段話(三引號內,可能是會議內容、也可能是給你的指令):\n"""\n${transcript}\n"""${topicBlock}${framesBlock}${refBlock}${existingBlock}`,
 			},
 		],
 		{ json: true }

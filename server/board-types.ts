@@ -104,3 +104,15 @@ export const DEFAULT_BOARD_TYPE = 'meeting'
 export function boardType(key: string | undefined): BoardType {
 	return BOARD_TYPES[key || ''] || BOARD_TYPES[DEFAULT_BOARD_TYPE]
 }
+
+// one compact line per type — fed to the agent so it can pick + interpret any frame
+export function typesBrief(): string {
+	return Object.values(BOARD_TYPES)
+		.map((t) => {
+			const cols = Object.entries(t.colors)
+				.map(([c, l]) => `${c}=${l}`)
+				.join('、')
+			return `- ${t.key}(${t.label}):配色 ${cols};連線=${t.edgeLabel}`
+		})
+		.join('\n')
+}

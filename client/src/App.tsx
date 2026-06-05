@@ -110,17 +110,19 @@ export default function App() {
 	const shareHost = isLocalHostPage && lanIp ? lanIp : location.hostname
 	const shareUrl = `${location.protocol}//${shareHost}${location.port ? ':' + location.port : ''}${location.pathname}?room=${encodeURIComponent(room)}`
 
-	const { doc, yShapes, yConnectors, yMeta, provider, undoMgr, LOCAL } = useMemo(() => {
+	const { doc, yShapes, yConnectors, yMeta, yFrames, provider, undoMgr, LOCAL } = useMemo(() => {
 		const doc = new Y.Doc()
 		const provider = new WebsocketProvider(SYNC_WS, room, doc)
 		const yShapes = doc.getMap<Sticky>('shapes')
 		const yConnectors = doc.getMap<Connector>('connectors')
 		const yMeta = doc.getMap<string>('meta') // board type + topic
+		const yFrames = doc.getMap<any>('frames') // diagrams on the canvas
 		const LOCAL = { local: true } // origin tag so undo only tracks MY edits, not remote/Mori
 		const undoMgr = new Y.UndoManager([yShapes, yConnectors], { trackedOrigins: new Set([LOCAL]) })
 		;(window as any).__getShapes = () => Array.from(yShapes.values())
 		;(window as any).__getConnectors = () => Array.from(yConnectors.values())
-		return { doc, yShapes, yConnectors, yMeta, provider, undoMgr, LOCAL }
+		;(window as any).__getFrames = () => Array.from(yFrames.values())
+		return { doc, yShapes, yConnectors, yMeta, yFrames, provider, undoMgr, LOCAL }
 	}, [room])
 
 	const [shapes, setShapes] = useState<Sticky[]>([])
@@ -149,7 +151,9 @@ export default function App() {
 	const [guide, setGuide] = useState(() => !localStorage.getItem('wb-seen-guide')) // first-run onboarding
 	const [boardTypeKey, setBoardTypeKey] = useState('meeting') // synced board type
 	const [boardTopic, setBoardTopic] = useState('')
+	const [frames, setFrames] = useState<any[]>([]) // diagrams on the canvas
 	const [typePickerOpen, setTypePickerOpen] = useState(false)
+	const [newFrameTitle, setNewFrameTitle] = useState('')
 	const [subtitle, setSubtitle] = useState('') // transient STT caption (UX feedback)
 	const subtitleTimer = useRef<any>(null)
 
@@ -236,12 +240,15 @@ export default function App() {
 			setBoardTypeKey((yMeta.get('type') as string) || 'meeting')
 			setBoardTopic((yMeta.get('topic') as string) || '')
 		}
+		const syncFrames = () => setFrames(Array.from(yFrames.values()))
 		sync()
 		syncC()
 		syncMeta()
+		syncFrames()
 		yShapes.observe(sync)
 		yConnectors.observe(syncC)
 		yMeta.observe(syncMeta)
+		yFrames.observe(syncFrames)
 		// presence: track everyone else's cursors (Mori + other humans)
 		const aw = (provider as any).awareness
 		const updateCursors = () => {
@@ -264,12 +271,13 @@ export default function App() {
 			yShapes.unobserve(sync)
 			yConnectors.unobserve(syncC)
 			yMeta.unobserve(syncMeta)
+			yFrames.unobserve(syncFrames)
 			aw.off('change', updateCursors)
 			provider.off('status', onStatus)
 			window.removeEventListener('resize', onResize)
 			provider.destroy()
 		}
-	}, [yShapes, yConnectors, yMeta, provider])
+	}, [yShapes, yConnectors, yMeta, yFrames, provider])
 
 	// keyboard: undo/redo + delete (but not while editing text)
 	useEffect(() => {
@@ -418,8 +426,16 @@ export default function App() {
 			else if (c?.action === 'clearFilter') setFilter(null)
 			setBusy(`指令:${r.commandLabel || '已執行'}`)
 		} else {
-			setBusy(`${prefix}+${r.added?.length ?? r.stickies ?? 0} 張、+${r.connectors ?? 0} 連線`)
+			const fl = r.frameLabel ? `${r.frameLabel} · ` : ''
+			setBusy(`${prefix}${fl}+${r.added?.length ?? r.stickies ?? 0} 張、+${r.connectors ?? 0} 連線`)
 		}
+	}
+	async function addFrame(type: string, title: string) {
+		await fetch(`${SYNC_HTTP}/api/rooms/${encodeURIComponent(room)}/frames`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ type, title }),
+		}).catch(() => {})
 	}
 
 	async function runAgent() {
@@ -780,6 +796,31 @@ export default function App() {
 				onDblTap={onStageDblClick}
 			>
 				<Layer>
+					{/* diagram frames (behind everything) — each is a typed sub-board */}
+					{frames.map((f) => (
+						<Group key={f.id} listening={false}>
+							<Rect
+								x={f.x}
+								y={f.y}
+								width={f.w}
+								height={f.h}
+								cornerRadius={18}
+								fill="rgba(255,255,255,0.32)"
+								stroke="rgba(28,26,23,0.16)"
+								strokeWidth={1.5}
+							/>
+							<Rect x={f.x} y={f.y} width={f.w} height={34} cornerRadius={[18, 18, 0, 0]} fill="rgba(180,83,10,0.1)" />
+							<Text
+								x={f.x + 16}
+								y={f.y + 10}
+								text={`${typeLabel(f.type)}　${f.title || ''}`}
+								fontSize={14}
+								fontStyle="600"
+								fontFamily={CANVAS_FONT}
+								fill="rgba(28,26,23,0.66)"
+							/>
+						</Group>
+					))}
 					{/* connectors behind stickies */}
 					{connectors.map((c) => {
 						const a = byId(c.from)
@@ -1006,12 +1047,11 @@ export default function App() {
 					分享 / QR
 				</button>
 				<button
-					title="這張板的類型 —— AI 會依此解讀卡片與連線。點我切換(會議 / 組織圖 / 流程圖 / 架構圖)"
+					title="這個會議的畫布上可以有多張圖。AI 會在你切到新主題時自動開對應的圖;這裡可以手動新增一張。"
 					style={{ background: 'var(--accent-soft)', borderColor: 'var(--accent)', color: 'var(--accent)' }}
 					onClick={() => setTypePickerOpen(true)}
 				>
-					{typeLabel(boardTypeKey)}
-					{boardTopic ? `:${boardTopic}` : ''}
+					＋ 新圖{frames.length ? `（共 ${frames.length}）` : ''}
 				</button>
 				<span style={{ color: 'var(--ink-soft)', fontSize: 12 }} title={status === 'synced' ? '已即時連線' : status}>
 					{status === 'synced' ? '已連線' : status} · {shapes.length} 張
@@ -1157,42 +1197,31 @@ export default function App() {
 					onClick={() => setTypePickerOpen(false)}
 					style={{ position: 'fixed', inset: 0, zIndex: 3500, background: 'rgba(28,26,23,0.4)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
 				>
-					<div className="glass modal-in" onClick={(e) => e.stopPropagation()} style={{ background: 'rgba(253,251,247,0.98)', width: 'min(420px, 92vw)', padding: 22, borderRadius: 18 }}>
-						<div style={{ fontWeight: 700, fontSize: 16 }}>這張板要畫什麼?</div>
-						<div style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '4px 0 14px' }}>選類型 —— AI 會用對應的方式解讀內容、配色、連線與排版。</div>
+					<div className="glass modal-in" onClick={(e) => e.stopPropagation()} style={{ background: 'rgba(253,251,247,0.98)', width: 'min(420px, 92vw)', maxHeight: '88vh', overflowY: 'auto', padding: 22, borderRadius: 18 }}>
+						<div style={{ fontWeight: 700, fontSize: 16 }}>新增一張圖</div>
+						<div style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '4px 0 12px' }}>
+							一個會議可以有多張圖。開會切到新主題時 AI 會自動開對應的圖;這裡可手動加一張並選圖型。
+						</div>
+						<input
+							value={newFrameTitle}
+							onChange={(e) => setNewFrameTitle(e.target.value.slice(0, 40))}
+							placeholder="圖的標題(選填,例:出貨流程)"
+							style={{ width: '100%', fontSize: 13, padding: '7px 9px', border: '1px solid var(--line)', borderRadius: 8, marginBottom: 12, boxSizing: 'border-box' }}
+						/>
 						{WB_TYPES.map((t) => (
 							<button
 								key={t.key}
 								onClick={() => {
-									setBoardType(t.key)
+									addFrame(t.key, newFrameTitle)
+									setNewFrameTitle('')
 									setTypePickerOpen(false)
 								}}
-								style={{
-									display: 'block',
-									width: '100%',
-									textAlign: 'left',
-									marginBottom: 8,
-									padding: '10px 12px',
-									background: boardTypeKey === t.key ? 'var(--accent-soft)' : 'rgba(255,255,255,0.6)',
-									borderColor: boardTypeKey === t.key ? 'var(--accent)' : 'var(--line)',
-								}}
+								style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 8, padding: '10px 12px', background: 'rgba(255,255,255,0.6)', borderColor: 'var(--line)' }}
 							>
-								<div style={{ fontWeight: 600, fontSize: 14, color: boardTypeKey === t.key ? 'var(--accent)' : 'var(--ink)' }}>
-									{t.label}
-									{boardTypeKey === t.key ? ' · 目前' : ''}
-								</div>
+								<div style={{ fontWeight: 600, fontSize: 14, color: 'var(--ink)' }}>{t.label}</div>
 								<div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{t.blurb}</div>
 							</button>
 						))}
-						<div style={{ display: 'flex', gap: 6, marginTop: 6, alignItems: 'center' }}>
-							<span style={{ fontSize: 12, color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>主題</span>
-							<input
-								defaultValue={boardTopic}
-								placeholder="選填,例:擎添工業組織"
-								onBlur={(e) => setBoardType(boardTypeKey, e.target.value)}
-								style={{ flex: 1, fontSize: 13, padding: '6px 8px', border: '1px solid var(--line)', borderRadius: 8 }}
-							/>
-						</div>
 					</div>
 				</div>
 			)}

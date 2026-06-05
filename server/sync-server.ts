@@ -266,7 +266,14 @@ function existingStickies(room: Room): ExistingCard[] {
 	return [...room.doc.getMap('shapes').values()]
 		.filter((s: any) => s.type === 'sticky')
 		.sort((a: any, b: any) => (a.id < b.id ? -1 : 1))
-		.map((s: any) => ({ id: s.id, text: s.text, color: s.color, owner: s.owner, tags: s.tags }))
+		.map((s: any) => ({ id: s.id, text: s.text, color: s.color, owner: s.owner, tags: s.tags, frameId: s.frameId }))
+}
+
+/** Frames (diagrams) on the canvas, in creation order (stable for agent indexing). */
+function getFrames(room: Room): { id: string; title: string; type: string }[] {
+	return [...room.doc.getMap('frames').values()]
+		.sort((a: any, b: any) => (a.id < b.id ? -1 : 1))
+		.map((f: any) => ({ id: f.id, title: f.title, type: f.type }))
 }
 
 const COLOR_BY_KIND: Record<string, string> = { topic: 'yellow', todo: 'green', decision: 'blue', risk: 'red' }
@@ -330,7 +337,8 @@ async function applyPlan(
 	roomName: string,
 	plan: BoardPlan,
 	drawnBy: string,
-	existingIds: string[]
+	existingIds: string[],
+	frameId?: string
 ): Promise<{ ids: string[]; connectorsDrawn: number }> {
 	const room = getRoom(roomName)
 	const shapes = room.doc.getMap('shapes')
@@ -388,6 +396,7 @@ async function applyPlan(
 					text: s.text,
 					color: s.color,
 					drawnBy,
+					...(frameId ? { frameId } : {}),
 					...(s.owner ? { owner: s.owner } : {}),
 					...(s.tags && s.tags.length ? { tags: s.tags } : {}),
 				})
@@ -483,16 +492,33 @@ async function runAgentTurn(roomName: string, transcript: string, by: string): P
 		const room = getRoom(roomName)
 		const meta = boardMeta(room)
 		const existing = existingStickies(room)
-		const { result, provider } = await planAgent(transcript, existing, meta.type, meta.topic)
+		const frames = getFrames(room)
+		const { result, provider } = await planAgent(transcript, existing, meta.topic, frames)
 		if (result.intent === 'command') {
 			const done = runCommand(room, existing, result.command)
 			console.log(`[agent] command in "${roomName}": ${done.label}`)
 			return { provider, intent: 'command', command: done.view ?? null, commandLabel: done.label, added: [], stickies: 0, connectors: 0 }
 		}
-		const r = await applyPlan(roomName, result.plan, by, existing.map((e) => e.id))
-		// non-column boards (org/flow/architecture/mindmap/swot…): re-flow into the right layout once new cards + connectors land
-		if (boardType(meta.type).layout !== 'columns' && (r.ids.length || r.connectorsDrawn)) tidyBoard(room)
-		return { provider, intent: 'content', added: result.plan.stickies, ids: r.ids, stickies: r.ids.length, connectors: r.connectorsDrawn }
+		// resolve which diagram (frame) this content belongs to; create one if the agent asked
+		let frameId: string | undefined
+		let frameLabel = ''
+		const fr = result.plan.frame
+		if (fr?.newType) {
+			const f = createFrame(room, fr.newType, fr.newTitle || '')
+			frameId = f.id
+			frameLabel = `開新圖:${boardType(f.type).label}「${f.title}」`
+		} else if (fr?.index != null && frames[fr.index]) {
+			frameId = frames[fr.index].id
+		} else if (frames.length) {
+			frameId = frames[0].id
+		} else {
+			const f = createFrame(room, meta.type, meta.topic || boardType(meta.type).label)
+			frameId = f.id
+			frameLabel = `開新圖:${boardType(f.type).label}`
+		}
+		const r = await applyPlan(roomName, result.plan, by, existing.map((e) => e.id), frameId)
+		if (r.ids.length || r.connectorsDrawn) tidyBoard(room) // re-flow every frame into its layout
+		return { provider, intent: 'content', added: result.plan.stickies, ids: r.ids, stickies: r.ids.length, connectors: r.connectorsDrawn, frameLabel }
 	})
 }
 
@@ -665,31 +691,27 @@ function boardMeta(room: Room): { type: string; topic: string } {
 	return { type, topic }
 }
 
-// meeting layout: group by kind into columns
-function columnsLayout(room: Room) {
-	const shapes = room.doc.getMap('shapes')
-	room.doc.transact(() => {
-		const rowByCol: Record<number, number> = {}
-		const list = [...shapes.values()]
-			.filter((s: any) => s.type === 'sticky')
-			.sort((a: any, b: any) => columnOf(a.color) - columnOf(b.color) || a.y - b.y || a.x - b.x)
-		for (const s of list as any[]) {
-			const col = columnOf(s.color)
-			const row = rowByCol[col] ?? 0
-			rowByCol[col] = row + 1
-			const { x, y } = slotXY(col, row)
-			shapes.set(s.id, { ...s, x, y })
-		}
-	})
+// ---- pure layout positioners: given a frame's cards (+ connectors), return
+// id -> {x,y} relative to an origin (ox,oy). No mutation — relayout() applies them. ----
+type Pos = Map<string, { x: number; y: number }>
+const W = CARD_W
+const H = CARD_H
+
+function colPositions(cards: any[], ox: number, oy: number): Pos {
+	const pos: Pos = new Map()
+	const rowByCol: Record<number, number> = {}
+	for (const s of [...cards].sort((a, b) => columnOf(a.color) - columnOf(b.color) || a.y - b.y || a.x - b.x)) {
+		const col = columnOf(s.color)
+		const row = rowByCol[col] ?? 0
+		rowByCol[col] = row + 1
+		pos.set(s.id, { x: ox + col * (W + COL_GAP), y: oy + row * (H + ROW_GAP) })
+	}
+	return pos
 }
 
-// org-chart / flow / architecture: hierarchical layout following the connectors
-function treeLayout(room: Room, dir: 'TB' | 'LR') {
-	const shapes = room.doc.getMap('shapes')
-	const conns = room.doc.getMap('connectors')
-	const nodes = [...shapes.values()].filter((s: any) => s.type === 'sticky') as any[]
-	if (!nodes.length) return
-	const ids = nodes.map((n) => n.id)
+// shared graph builder for tree/radial
+function buildGraph(cards: any[], conns: any[]) {
+	const ids = cards.map((c) => c.id)
 	const idset = new Set(ids)
 	const children = new Map<string, string[]>()
 	const indeg = new Map<string, number>()
@@ -697,15 +719,22 @@ function treeLayout(room: Room, dir: 'TB' | 'LR') {
 		children.set(id, [])
 		indeg.set(id, 0)
 	})
-	for (const c of [...conns.values()] as any[]) {
+	for (const c of conns) {
 		if (idset.has(c.from) && idset.has(c.to) && c.from !== c.to) {
 			children.get(c.from)!.push(c.to)
 			indeg.set(c.to, (indeg.get(c.to) || 0) + 1)
 		}
 	}
+	return { ids, children, indeg }
+}
+
+function treePositions(cards: any[], conns: any[], ox: number, oy: number, dir: 'TB' | 'LR'): Pos {
+	const pos: Pos = new Map()
+	if (!cards.length) return pos
+	const byId = new Map(cards.map((c) => [c.id, c]))
+	const { ids, children, indeg } = buildGraph(cards, conns)
 	let roots = ids.filter((id) => (indeg.get(id) || 0) === 0)
 	if (!roots.length) roots = [ids[0]]
-	// longest-path level (a node sits one row below its deepest parent)
 	const level = new Map<string, number>()
 	const queue: [string, number][] = roots.map((r) => [r, 0])
 	let guard = 0
@@ -718,12 +747,9 @@ function treeLayout(room: Room, dir: 'TB' | 'LR') {
 	ids.forEach((id) => {
 		if (!level.has(id)) level.set(id, 0)
 	})
-	// group by level; order within a level by current position (stable)
-	const order = [...ids].sort((a, b) => {
-		const sa = shapes.get(a) as any
-		const sb = shapes.get(b) as any
-		return level.get(a)! - level.get(b)! || (dir === 'LR' ? sa.y - sb.y : sa.x - sb.x)
-	})
+	const order = [...ids].sort(
+		(a, b) => level.get(a)! - level.get(b)! || (dir === 'LR' ? byId.get(a).y - byId.get(b).y : byId.get(a).x - byId.get(b).x)
+	)
 	const byLevel = new Map<number, string[]>()
 	for (const id of order) {
 		const lv = level.get(id)!
@@ -732,40 +758,17 @@ function treeLayout(room: Room, dir: 'TB' | 'LR') {
 	}
 	const GX = 250
 	const GY = 240
-	const X0 = 140
-	const Y0 = 130
-	room.doc.transact(() => {
-		for (const [lv, list] of byLevel) {
-			list.forEach((id, i) => {
-				const cur = shapes.get(id) as any
-				const x = dir === 'LR' ? X0 + lv * GX : X0 + i * GX
-				const y = dir === 'LR' ? Y0 + i * GY : Y0 + lv * GY
-				shapes.set(id, { ...cur, x, y })
-			})
-		}
-	})
+	for (const [lv, list] of byLevel)
+		list.forEach((id, i) => {
+			pos.set(id, dir === 'LR' ? { x: ox + lv * GX, y: oy + i * GY } : { x: ox + i * GX, y: oy + lv * GY })
+		})
+	return pos
 }
 
-// mind map: center node + concentric rings by depth (following connectors)
-function radialLayout(room: Room) {
-	const shapes = room.doc.getMap('shapes')
-	const conns = room.doc.getMap('connectors')
-	const nodes = [...shapes.values()].filter((s: any) => s.type === 'sticky') as any[]
-	if (!nodes.length) return
-	const ids = nodes.map((n) => n.id)
-	const idset = new Set(ids)
-	const children = new Map<string, string[]>()
-	const indeg = new Map<string, number>()
-	ids.forEach((id) => {
-		children.set(id, [])
-		indeg.set(id, 0)
-	})
-	for (const c of [...conns.values()] as any[]) {
-		if (idset.has(c.from) && idset.has(c.to) && c.from !== c.to) {
-			children.get(c.from)!.push(c.to)
-			indeg.set(c.to, (indeg.get(c.to) || 0) + 1)
-		}
-	}
+function radialPositions(cards: any[], conns: any[], ox: number, oy: number): Pos {
+	const pos: Pos = new Map()
+	if (!cards.length) return pos
+	const { ids, children, indeg } = buildGraph(cards, conns)
 	const roots = ids.filter((id) => (indeg.get(id) || 0) === 0)
 	const center = roots[0] || ids[0]
 	const level = new Map<string, number>([[center, 0]])
@@ -782,8 +785,6 @@ function radialLayout(room: Room) {
 	ids.forEach((id) => {
 		if (!level.has(id)) level.set(id, 1)
 	})
-	// angular allocation: give each subtree an arc proportional to its leaf count,
-	// so children sit in their parent's sector (a real mind-map look)
 	const leaves = new Map<string, number>()
 	const countLeaves = (id: string, seen = new Set<string>()): number => {
 		if (seen.has(id)) return 1
@@ -809,53 +810,96 @@ function radialLayout(room: Room) {
 		}
 	}
 	assign(center, -Math.PI / 2, (3 * Math.PI) / 2)
-	const CX = 760
-	const CY = 520
 	const RING = 240
+	const maxLv = Math.max(0, ...[...level.values()])
+	const cx = ox + RING * maxLv
+	const cy = oy + RING * maxLv
+	for (const id of ids) {
+		const lv = level.get(id)!
+		if (lv === 0) pos.set(id, { x: cx, y: cy })
+		else pos.set(id, { x: cx + RING * lv * Math.cos(ang.get(id) ?? 0), y: cy + RING * lv * Math.sin(ang.get(id) ?? 0) })
+	}
+	return pos
+}
+
+function quadrantPositions(cards: any[], ox: number, oy: number): Pos {
+	const pos: Pos = new Map()
+	const g: Record<string, any[]> = { green: [], yellow: [], blue: [], red: [] }
+	for (const s of cards) (g[s.color] || g.green).push(s)
+	const GY = 24
+	const topRows = Math.max(g.green.length, g.yellow.length)
+	const botY = oy + topRows * (H + GY) + 80
+	const leftX = ox
+	const rightX = ox + W + 80
+	const place = (arr: any[], x: number, y0: number) => arr.forEach((s, i) => pos.set(s.id, { x, y: y0 + i * (H + GY) }))
+	place(g.green, leftX, oy)
+	place(g.yellow, rightX, oy)
+	place(g.blue, leftX, botY)
+	place(g.red, rightX, botY)
+	return pos
+}
+
+function layoutPositions(typeKey: string, cards: any[], conns: any[], ox: number, oy: number): Pos {
+	const bt = boardType(typeKey)
+	if (bt.layout === 'tree') return treePositions(cards, conns, ox, oy, bt.dir)
+	if (bt.layout === 'radial') return radialPositions(cards, conns, ox, oy)
+	if (bt.layout === 'quadrant') return quadrantPositions(cards, ox, oy)
+	return colPositions(cards, ox, oy)
+}
+
+const FRAME_PAD = 28
+const FRAME_HEAD = 60 // room for the frame title bar
+
+// Lay out every frame's cards within that frame, and resize each frame to fit.
+// Frameless boards (legacy / single-diagram) fall back to one whole-board layout.
+function tidyBoard(room: Room) {
+	const shapes = room.doc.getMap('shapes')
+	const frames = room.doc.getMap('frames')
+	const conns = [...room.doc.getMap('connectors').values()] as any[]
+	const allCards = [...shapes.values()].filter((s: any) => s.type === 'sticky') as any[]
+	const frameList = [...frames.values()] as any[]
 	room.doc.transact(() => {
-		for (const id of ids) {
-			const lv = level.get(id)!
-			const cur = shapes.get(id) as any
-			if (lv === 0) {
-				shapes.set(id, { ...cur, x: CX - 100, y: CY - 100 })
-				continue
+		if (!frameList.length) {
+			const pos = layoutPositions(boardMeta(room).type, allCards, conns, X0, Y0)
+			for (const [id, p] of pos) {
+				const cur = shapes.get(id) as any
+				if (cur) shapes.set(id, { ...cur, ...p })
 			}
-			const r = RING * lv
-			const a = ang.get(id) ?? 0
-			shapes.set(id, { ...cur, x: CX - 100 + r * Math.cos(a), y: CY - 100 + r * Math.sin(a) })
+			return
+		}
+		for (const f of frameList) {
+			const cards = allCards.filter((s) => s.frameId === f.id)
+			if (!cards.length) continue
+			const pos = layoutPositions(f.type, cards, conns, f.x + FRAME_PAD, f.y + FRAME_HEAD)
+			let maxX = f.x
+			let maxY = f.y
+			for (const [id, p] of pos) {
+				const cur = shapes.get(id) as any
+				if (!cur) continue
+				shapes.set(id, { ...cur, x: p.x, y: p.y })
+				maxX = Math.max(maxX, p.x + (cur.w || W))
+				maxY = Math.max(maxY, p.y + (cur.h || H))
+			}
+			frames.set(f.id, { ...f, w: Math.max(440, maxX - f.x + FRAME_PAD), h: Math.max(300, maxY - f.y + FRAME_PAD) })
 		}
 	})
 }
 
-// SWOT / 2x2 matrix: four quadrants by colour (green=TL, yellow=TR, blue=BL, red=BR)
-function quadrantLayout(room: Room) {
-	const shapes = room.doc.getMap('shapes')
-	const nodes = [...shapes.values()].filter((s: any) => s.type === 'sticky') as any[]
-	const g: Record<string, any[]> = { green: [], yellow: [], blue: [], red: [] }
-	for (const s of nodes) (g[s.color] || g.green).push(s)
-	const CH = 200
-	const GY = 24
-	const topRows = Math.max(g.green.length, g.yellow.length)
-	const topY = 150
-	const botY = topY + topRows * (CH + GY) + 80
-	const leftX = 140
-	const rightX = 420
-	const place = (arr: any[], x: number, y0: number) =>
-		arr.forEach((s, i) => shapes.set(s.id, { ...s, x, y: y0 + i * (CH + GY), w: 200, h: 200 }))
-	room.doc.transact(() => {
-		place(g.green, leftX, topY)
-		place(g.yellow, rightX, topY)
-		place(g.blue, leftX, botY)
-		place(g.red, rightX, botY)
-	})
-}
-
-function tidyBoard(room: Room) {
-	const bt = boardType(boardMeta(room).type)
-	if (bt.layout === 'tree') treeLayout(room, bt.dir)
-	else if (bt.layout === 'radial') radialLayout(room)
-	else if (bt.layout === 'quadrant') quadrantLayout(room)
-	else columnsLayout(room)
+// place a brand-new frame to the right of existing ones (so they don't overlap)
+function createFrame(room: Room, type: string, title: string): any {
+	const frames = room.doc.getMap('frames')
+	const list = [...frames.values()] as any[]
+	let x = 80
+	let y = 80
+	if (list.length) {
+		const right = list.reduce((a, b) => (a.x + a.w > b.x + b.w ? a : b))
+		x = right.x + right.w + 90
+		y = right.y
+	}
+	const id = rid('frame')
+	const f = { id, title: title || boardType(type).label, type, x, y, w: 480, h: 320 }
+	room.doc.transact(() => frames.set(id, f))
+	return f
 }
 app.post('/api/rooms/:room/tidy', (req, res) => {
 	tidyBoard(getRoom(req.params.room))
@@ -879,6 +923,14 @@ app.post('/api/rooms/:room/meta', (req, res) => {
 		if (req.body?.topic !== undefined) m.set('topic', String(req.body.topic).slice(0, 80))
 	})
 	res.json({ ok: true, ...boardMeta(room) })
+})
+
+// frames = the diagrams on a meeting's canvas
+app.get('/api/rooms/:room/frames', (req, res) => res.json({ ok: true, frames: getFrames(getRoom(req.params.room)) }))
+app.post('/api/rooms/:room/frames', (req, res) => {
+	const type = BOARD_TYPES[String(req.body?.type ?? '')] ? String(req.body.type) : DEFAULT_BOARD_TYPE
+	const f = createFrame(getRoom(req.params.room), type, String(req.body?.title ?? '').slice(0, 40))
+	res.json({ ok: true, frame: f })
 })
 
 app.get('/api/health', (_req, res) => {
