@@ -1,5 +1,8 @@
+mod agent;
+mod apply;
 mod board_types;
 mod layout;
+mod llm;
 mod store;
 mod sync;
 mod yval;
@@ -23,6 +26,7 @@ struct Settings {
     #[serde(rename = "whisperUrl")]
     whisper_url: String,
 }
+static AGENT_LOCK: Lazy<Mutex<()>> = Lazy::new(|| Mutex::new(()));
 static SETTINGS: Lazy<Mutex<Settings>> = Lazy::new(|| {
     Mutex::new(Settings {
         spacing: 1.0,
@@ -255,7 +259,26 @@ async fn main() {
         Ok::<_, warp::Rejection>(warp::reply::json(&json!({ "ok": true, "spacing": s.spacing, "autoTidy": s.auto_tidy, "mode": s.mode, "sttSource": s.stt_source, "localOnly": s.local_only, "whisperUrl": s.whisper_url })))
     });
 
-    let api = health
+    // POST /api/agent/:room — the AI turn (intent classify -> command or content)
+    let r_agent = rooms.clone();
+    let agent_ep = warp::post().and(warp::path!("api" / "agent" / String)).and(warp::body::json()).and(with(r_agent)).and_then(|name: String, body: Value, rooms: sync::Rooms| async move {
+        let transcript = body.get("transcript").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+        if transcript.is_empty() {
+            return Ok::<_, warp::Rejection>(warp::reply::json(&json!({ "ok": false, "error": "transcript required" })));
+        }
+        let by: String = body.get("by").and_then(|v| v.as_str()).unwrap_or("agent").chars().take(24).collect();
+        let room = sync::get_or_create_room(&rooms, &name).await;
+        let s = SETTINGS.lock().await.clone();
+        let _guard = AGENT_LOCK.lock().await; // serialize agent turns (per-room race guard)
+        let res = apply::run_agent_turn(&room, &transcript, &by, s.local_only, s.auto_tidy, s.spacing).await;
+        Ok(match res {
+            Ok(v) => warp::reply::json(&v),
+            Err(e) => warp::reply::json(&json!({ "ok": false, "error": e })),
+        })
+    });
+
+    let api = agent_ep
+        .or(health)
         .or(lan)
         .or(rooms_list)
         .or(tidy)
