@@ -25,6 +25,7 @@ export type AgentCommand =
 	| { action: 'assign'; index: number; owner: string }
 	| { action: 'recolor'; index: number; kind: string }
 	| { action: 'tag'; index: number; tags: string[] }
+	| { action: 'edit'; index: number; text: string }
 
 export type AgentResult = { intent: 'content'; plan: BoardPlan } | { intent: 'command'; command: AgentCommand }
 
@@ -50,7 +51,9 @@ const SYSTEM = `你是會議白板助手。每次收到「使用者這段話」+
 - 把第 N 張指派給某人 / 這給某人:   { "action":"assign", "index":<既有卡索引>, "owner":"<人名>" }
 - 把第 N 張改成某類型:             { "action":"recolor", "index":<既有卡索引>, "kind":"topic|todo|decision|risk" }
 - 把第 N 張加上標籤:               { "action":"tag", "index":<既有卡索引>, "tags":["<標籤>"] }
+- 把第 N 張的文字改寫成…:          { "action":"edit", "index":<既有卡索引>, "text":"<新文字,≤14字>" }
 index 一律用下方「目前白板」清單的索引(找最符合使用者描述的那張)。
+注意:「改成<某類型>」(主題/待辦/決議/風險)用 recolor;「改成/改寫成<某段新文字>」用 edit。
 
 【若是 content】輸出 { "intent":"content", "stickies":[ { "text":"<繁中短語,最多14字>", "kind":"topic|todo|decision|risk", "owner":"<可省略>", "tags":["<內容標籤>"] } ], "connectors":[ { "from":<索引>, "to":<索引> } ], "updates":[...], "deletes":[...] }
 content 規則:
@@ -70,6 +73,7 @@ content 規則:
 「只看亞澤的」→ {"intent":"command","command":{"action":"filter","by":"owner","value":"亞澤"}}
 「第2張改成決議」→ {"intent":"command","command":{"action":"recolor","index":2,"kind":"decision"}}
 「把預約那張標上前端」→ {"intent":"command","command":{"action":"tag","index":0,"tags":["前端"]}}
+「把第0張改寫成線上掛號系統」→ {"intent":"command","command":{"action":"edit","index":0,"text":"線上掛號系統"}}
 空白板講內容 → {"intent":"content","stickies":[{"text":"線上預約系統","kind":"topic"},{"text":"重複預約問題","kind":"risk"}],"connectors":[{"from":0,"to":1}]}`
 
 function extractJson(raw: string): any {
@@ -161,6 +165,11 @@ function sanitizeCommand(c: any, existingCount: number): AgentCommand | null {
 				? c.tags.filter((t: any) => typeof t === 'string' && t.trim()).slice(0, 3).map((t: string) => t.trim().slice(0, 8))
 				: []
 			return inRange(i) && tags.length ? { action: 'tag', index: i, tags } : null
+		}
+		case 'edit': {
+			const i = toI(c.index)
+			const text = typeof c.text === 'string' ? c.text.trim().slice(0, 40) : ''
+			return inRange(i) && text ? { action: 'edit', index: i, text } : null
 		}
 		default:
 			return null

@@ -308,6 +308,13 @@ function runCommand(room: Room, existing: ExistingCard[], cmd: AgentCommand): { 
 			}
 			return { label: cur ? `「${cur.text}」加上 #${cmd.tags.join(' #')}` : '加標籤失敗' }
 		}
+		case 'edit': {
+			const id = existing[cmd.index]?.id
+			const cur = id ? (shapes.get(id) as any) : undefined
+			const old = cur?.text
+			if (cur) room.doc.transact(() => shapes.set(id, { ...cur, text: cmd.text }))
+			return { label: cur ? `「${old}」改寫為「${cmd.text}」` : '改寫失敗' }
+		}
 	}
 }
 
