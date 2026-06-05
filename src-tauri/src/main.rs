@@ -34,6 +34,8 @@ fn register_body_part() {
 }
 
 fn main() {
+    // the embedded server is for this desktop app only — keep it on loopback
+    std::env::set_var("BIND", "127.0.0.1");
     // start the embedded mori-canvas server on a background multi-thread runtime
     std::thread::spawn(|| {
         let rt = tokio::runtime::Builder::new_multi_thread().enable_all().build().expect("tokio runtime");

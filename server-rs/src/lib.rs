@@ -534,7 +534,19 @@ pub async fn serve(port: u16) {
     });
     let routes = api.or(ws).or(serve_client).with(cors);
     maybe_register_body_part(port);
-    println!("mori-canvas-server (Rust) on http://127.0.0.1:{port}");
     let _ = Arc::clone(&rooms);
-    warp::serve(routes).run(([127, 0, 0, 1], port)).await;
+
+    // BIND (default 0.0.0.0 so LAN devices reach it; Tauri sets 127.0.0.1).
+    // HTTPS=1 + certs => serve TLS itself (replaces Vite's HTTPS role; LAN mic needs a secure ctx).
+    let ip: std::net::Ipv4Addr = std::env::var("BIND").ok().and_then(|b| b.parse().ok()).unwrap_or(std::net::Ipv4Addr::new(0, 0, 0, 0));
+    let cert = std::env::var("TLS_CERT").unwrap_or_else(|_| "certs/cert.pem".into());
+    let key = std::env::var("TLS_KEY").unwrap_or_else(|_| "certs/key.pem".into());
+    let server = warp::serve(routes);
+    if std::env::var("HTTPS").as_deref() == Ok("1") && std::path::Path::new(&cert).exists() && std::path::Path::new(&key).exists() {
+        println!("mori-canvas-server (Rust, HTTPS) on https://{ip}:{port}");
+        server.tls().cert_path(&cert).key_path(&key).run((ip, port)).await;
+    } else {
+        println!("mori-canvas-server (Rust) on http://{ip}:{port}");
+        server.run((ip, port)).await;
+    }
 }
