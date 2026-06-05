@@ -299,6 +299,15 @@ function runCommand(room: Room, existing: ExistingCard[], cmd: AgentCommand): { 
 			if (cur && color) room.doc.transact(() => shapes.set(id, { ...cur, color }))
 			return { label: cur ? `「${cur.text}」改為${KIND_BY_COLOR[color] ?? cmd.kind}` : '改色失敗' }
 		}
+		case 'tag': {
+			const id = existing[cmd.index]?.id
+			const cur = id ? (shapes.get(id) as any) : undefined
+			if (cur) {
+				const merged = [...new Set([...(cur.tags || []), ...cmd.tags])].slice(0, 3)
+				room.doc.transact(() => shapes.set(id, { ...cur, tags: merged }))
+			}
+			return { label: cur ? `「${cur.text}」加上 #${cmd.tags.join(' #')}` : '加標籤失敗' }
+		}
 	}
 }
 

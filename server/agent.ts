@@ -24,6 +24,7 @@ export type AgentCommand =
 	| { action: 'clearFilter' }
 	| { action: 'assign'; index: number; owner: string }
 	| { action: 'recolor'; index: number; kind: string }
+	| { action: 'tag'; index: number; tags: string[] }
 
 export type AgentResult = { intent: 'content'; plan: BoardPlan } | { intent: 'command'; command: AgentCommand }
 
@@ -48,6 +49,7 @@ const SYSTEM = `你是會議白板助手。每次收到「使用者這段話」+
 - 顯示全部 / 取消篩選 / 看全部:     { "action":"clearFilter" }
 - 把第 N 張指派給某人 / 這給某人:   { "action":"assign", "index":<既有卡索引>, "owner":"<人名>" }
 - 把第 N 張改成某類型:             { "action":"recolor", "index":<既有卡索引>, "kind":"topic|todo|decision|risk" }
+- 把第 N 張加上標籤:               { "action":"tag", "index":<既有卡索引>, "tags":["<標籤>"] }
 index 一律用下方「目前白板」清單的索引(找最符合使用者描述的那張)。
 
 【若是 content】輸出 { "intent":"content", "stickies":[ { "text":"<繁中短語,最多14字>", "kind":"topic|todo|decision|risk", "owner":"<可省略>", "tags":["<內容標籤>"] } ], "connectors":[ { "from":<索引>, "to":<索引> } ], "updates":[...], "deletes":[...] }
@@ -67,6 +69,7 @@ content 規則:
 「幫我排一下」→ {"intent":"command","command":{"action":"tidy"}}
 「只看亞澤的」→ {"intent":"command","command":{"action":"filter","by":"owner","value":"亞澤"}}
 「第2張改成決議」→ {"intent":"command","command":{"action":"recolor","index":2,"kind":"decision"}}
+「把預約那張標上前端」→ {"intent":"command","command":{"action":"tag","index":0,"tags":["前端"]}}
 空白板講內容 → {"intent":"content","stickies":[{"text":"線上預約系統","kind":"topic"},{"text":"重複預約問題","kind":"risk"}],"connectors":[{"from":0,"to":1}]}`
 
 function extractJson(raw: string): any {
@@ -151,6 +154,13 @@ function sanitizeCommand(c: any, existingCount: number): AgentCommand | null {
 			const i = toI(c.index)
 			const kind = typeof c.kind === 'string' && COLOR_BY_KIND[c.kind] ? c.kind : ''
 			return inRange(i) && kind ? { action: 'recolor', index: i, kind } : null
+		}
+		case 'tag': {
+			const i = toI(c.index)
+			const tags = Array.isArray(c.tags)
+				? c.tags.filter((t: any) => typeof t === 'string' && t.trim()).slice(0, 3).map((t: string) => t.trim().slice(0, 8))
+				: []
+			return inRange(i) && tags.length ? { action: 'tag', index: i, tags } : null
 		}
 		default:
 			return null
