@@ -181,13 +181,23 @@ input:focus, textarea:focus, select:focus { outline: 2px solid var(--accent); ou
 .rec-dot { display: inline-block; width: 11px; height: 11px; border-radius: 50%; background: #e11d48; margin-right: 9px; vertical-align: middle; flex: 0 0 auto; }
 .btn-rec.live .rec-dot { border-radius: 2px; background: #fff; }
 
+/* the Konva canvas: own the gestures (we do pan/pinch ourselves) + no long-press callout */
+.konvajs-content { touch-action: none; -webkit-touch-callout: none; -webkit-user-select: none; user-select: none; }
+
+/* respect reduced-motion — kill the pulse + entrance animations */
+@media (prefers-reduced-motion: reduce) {
+  *, .float-in, .modal-in, .live, .btn-rec.live { animation: none !important; }
+}
+
 @media (max-width: 700px) {
-  button, .btn { padding: 9px 13px; font-size: 14px; }
+  button, .btn { padding: 10px 13px; font-size: 14px; min-height: 44px; }   /* >= 44px touch target */
+  /* iOS zooms the page when focusing an input < 16px — force 16px on touch */
+  input, textarea, select { font-size: 16px !important; }
   /* tools become a compact icon-only row under the top bar, horizontally scrollable —
      no longer a tall left column colliding with the bottom record panel */
-  .toolstrip { top: 58px; left: 8px; right: 8px; flex-direction: row; gap: 5px; overflow-x: auto; padding: 5px 7px; border-radius: 13px; background: var(--surface); box-shadow: 0 4px 16px rgba(28,26,23,0.1); scrollbar-width: none; }
+  .toolstrip { top: calc(58px + env(safe-area-inset-top, 0px)); left: 8px; right: 8px; flex-direction: row; gap: 5px; overflow-x: auto; padding: 5px 7px; border-radius: 13px; background: var(--surface); box-shadow: 0 4px 16px rgba(28,26,23,0.1); scrollbar-width: none; }
   .toolstrip::-webkit-scrollbar { display: none; }
-  .toolstrip .tool { flex: 0 0 auto; font-size: 0; gap: 0; padding: 9px; }
-  .toolstrip .tool svg { width: 20px; height: 20px; margin: 0; }
-  .tool-divider { width: 1px; height: 22px; margin: 0 2px; align-self: center; flex: 0 0 auto; }
+  .toolstrip .tool { flex: 0 0 auto; font-size: 0; gap: 0; padding: 10px; min-height: 44px; }
+  .toolstrip .tool svg { width: 22px; height: 22px; margin: 0; }
+  .tool-divider { width: 1px; height: 24px; margin: 0 2px; align-self: center; flex: 0 0 auto; }
 }

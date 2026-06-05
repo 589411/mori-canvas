@@ -1,0 +1,16 @@
+{
+  "name": "Mori Canvas 共筆白板",
+  "short_name": "Mori Canvas",
+  "description": "講話/逐字稿 → AI 自動整理成便利貼+圖的多人即時會議白板。",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#faf7f1",
+  "theme_color": "#faf7f1",
+  "icons": [
+    { "src": "/icons/mori-128.png", "sizes": "128x128", "type": "image/png" },
+    { "src": "/icons/mori-256.png", "sizes": "256x256", "type": "image/png", "purpose": "any" },
+    { "src": "/icons/mori-512.png", "sizes": "512x512", "type": "image/png", "purpose": "any maskable" }
+  ]
+}

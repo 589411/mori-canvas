@@ -2,8 +2,37 @@
 <html lang="zh-TW">
 	<head>
 		<meta charset="UTF-8" />
-		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no" />
+		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no, viewport-fit=cover" />
 		<title>Mori Canvas 共筆白板</title>
+		<meta name="description" content="講話或貼逐字稿,AI 自動整理成便利貼與關係圖的多人即時會議白板。自架、零授權成本(全 MIT)。" />
+
+		<!-- status-bar / browser-UI tint -->
+		<meta name="theme-color" content="#faf7f1" media="(prefers-color-scheme: light)" />
+		<meta name="theme-color" content="#13110e" media="(prefers-color-scheme: dark)" />
+
+		<!-- PWA / 加到主畫面 -->
+		<link rel="manifest" href="/manifest.webmanifest" />
+		<meta name="apple-mobile-web-app-capable" content="yes" />
+		<meta name="mobile-web-app-capable" content="yes" />
+		<meta name="apple-mobile-web-app-status-bar-style" content="default" />
+		<meta name="apple-mobile-web-app-title" content="Mori Canvas" />
+
+		<!-- favicon / app icons -->
+		<link rel="icon" type="image/png" sizes="128x128" href="/icons/mori-128.png" />
+		<link rel="apple-touch-icon" href="/icons/mori-256.png" />
+
+		<!-- social preview (OG / Twitter) — og:image relative; for a LINE/FB preview to show
+		     reliably, point it at an absolute https URL once the deploy domain is known. -->
+		<meta property="og:type" content="website" />
+		<meta property="og:site_name" content="Mori Canvas" />
+		<meta property="og:title" content="Mori Canvas 共筆白板" />
+		<meta property="og:description" content="講話或貼逐字稿 → AI 自動整理成便利貼+圖的多人即時會議白板。" />
+		<meta property="og:image" content="/icons/mori-512.png" />
+		<meta name="twitter:card" content="summary" />
+		<meta name="twitter:title" content="Mori Canvas 共筆白板" />
+		<meta name="twitter:description" content="AI 會議白板:講話 → 便利貼+關係圖,多人即時協作。" />
+		<meta name="twitter:image" content="/icons/mori-512.png" />
+
 		<link rel="preconnect" href="https://fonts.googleapis.com" />
 		<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
 		<link
@@ -11,8 +40,12 @@
 			rel="stylesheet"
 		/>
 		<script>
-			// set theme before paint (no flash). default = light. (Styling lives in src/styles.css.)
-			try { var t = localStorage.getItem('mc-theme'); if (t) document.documentElement.setAttribute('data-theme', t) } catch (e) {}
+			// set theme before paint (no flash): saved choice > OS preference > light.
+			try {
+				var t = localStorage.getItem('mc-theme')
+				if (!t && window.matchMedia && matchMedia('(prefers-color-scheme: dark)').matches) t = 'dark'
+				if (t) document.documentElement.setAttribute('data-theme', t)
+			} catch (e) {}
 		</script>
 	</head>
 	<body>

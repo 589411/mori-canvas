@@ -1557,7 +1557,7 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 			{/* top bar — desktop: centred room bar; mobile: one compact bar + ⋯ overflow menu */}
 			{mobile ? (
 				<>
-					<div className="glass float-in" style={{ position: 'fixed', top: 8, left: 8, right: 8, zIndex: 1000, display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', fontSize: 13 }}>
+					<div className="glass float-in" style={{ position: 'fixed', top: 'calc(8px + env(safe-area-inset-top, 0px))', left: 'calc(8px + env(safe-area-inset-left, 0px))', right: 'calc(8px + env(safe-area-inset-right, 0px))', zIndex: 1000, display: 'flex', alignItems: 'center', gap: 8, padding: '6px 10px', fontSize: 13 }}>
 						<span className="code" style={{ fontSize: 17, color: 'var(--accent)' }}>{room}</span>
 						<button className="btn-accent" style={{ padding: '5px 11px' }} onClick={() => setShareOpen(true)}>分享</button>
 						<span style={{ flex: 1 }} />
@@ -1565,7 +1565,7 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 						<button style={btn} title="更多" onClick={() => setMenuOpen((v) => !v)}>⋯</button>
 					</div>
 					{menuOpen && (
-						<div className="glass float-in" style={{ position: 'fixed', top: 54, right: 8, zIndex: 2100, display: 'flex', flexDirection: 'column', gap: 5, padding: 8, minWidth: 156 }} onClick={() => setMenuOpen(false)}>
+						<div className="glass float-in" style={{ position: 'fixed', top: 'calc(54px + env(safe-area-inset-top, 0px))', right: 'calc(8px + env(safe-area-inset-right, 0px))', zIndex: 2100, display: 'flex', flexDirection: 'column', gap: 5, padding: 8, minWidth: 156 }} onClick={() => setMenuOpen(false)}>
 							<button className="btn-soft" onClick={() => setExportOpen(true)}>匯出 / 會議紀錄</button>
 							<button onClick={() => setSettingsOpen(true)}>⚙ 設定</button>
 							<button onClick={() => toggleTheme()}>{theme === 'dark' ? '☀ 亮色主題' : '☾ 暗色主題'}</button>
@@ -1920,7 +1920,7 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 
 							{/* demo / sponsor banner (only when the host sets SPONSOR_URL / DEMO_NOTICE env) */}
 				{(sponsor.notice || sponsor.url) && !sponsorHidden && (
-					<div className="glass float-in" style={{ position: 'fixed', bottom: 14, right: 14, zIndex: 1300, display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', maxWidth: 'min(92vw, 430px)', fontSize: 12.5 }}>
+					<div className="glass float-in" style={{ position: 'fixed', bottom: 'calc(14px + env(safe-area-inset-bottom, 0px))', right: 'calc(14px + env(safe-area-inset-right, 0px))', zIndex: 1300, display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', maxWidth: 'min(92vw, 430px)', fontSize: 12.5 }}>
 						{sponsor.notice && <span className="muted" style={{ lineHeight: 1.35 }}>{sponsor.notice}</span>}
 						{sponsor.url && (
 							<a href={sponsor.url} target="_blank" rel="noreferrer" style={{ flex: '0 0 auto' }}>
@@ -2142,7 +2142,7 @@ const hint: React.CSSProperties = {
 const panel: React.CSSProperties = {
 	position: 'fixed',
 	left: 14,
-	bottom: 38,
+	bottom: 'calc(38px + env(safe-area-inset-bottom, 0px))',
 	zIndex: 1000,
 	padding: 12,
 	fontSize: 13,
