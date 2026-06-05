@@ -30,6 +30,8 @@ const KIND_ACCENT: Record<string, string> = {
 	red: '#c46a61',
 }
 const CANVAS_FONT = "'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', system-ui, sans-serif"
+const KIND_LABEL: Record<string, string> = { yellow: '主題', green: '待辦', blue: '決議', red: '風險' }
+const KIND_ORDER = ['yellow', 'green', 'blue', 'red'] as const
 // Same-origin: the API and the sync websocket both go through Vite's reverse
 // proxy, so this works over http OR https (and behind a tunnel) with no hardcoded
 // port. ws upgrades to wss automatically when the page is served over https.
@@ -127,6 +129,7 @@ export default function App() {
 	const [joinCode, setJoinCode] = useState('')
 	const [roomList, setRoomList] = useState<{ id: string; shapes: number; online: number }[]>([])
 	const [panelOpen, setPanelOpen] = useState(window.innerWidth >= 700) // collapse agent panel on small screens
+	const [guide, setGuide] = useState(() => !localStorage.getItem('wb-seen-guide')) // first-run onboarding
 
 	// presence: my identity (persistent name + colour) + everyone else's cursors
 	const [myName, setMyName] = useState(() => localStorage.getItem('wb-name') || '訪客-' + genCode(3))
@@ -545,6 +548,69 @@ export default function App() {
 
 	return (
 		<div className="board-bg" style={{ position: 'fixed', inset: 0 }}>
+			{/* first-run onboarding / help */}
+			{guide && (
+				<div
+					style={{
+						position: 'fixed',
+						inset: 0,
+						zIndex: 4000,
+						background: 'rgba(28,26,23,0.5)',
+						backdropFilter: 'blur(4px)',
+						display: 'flex',
+						alignItems: 'center',
+						justifyContent: 'center',
+						padding: 16,
+					}}
+				>
+					<div
+						className="glass modal-in"
+						style={{ background: 'rgba(253,251,247,0.98)', width: 'min(440px, 92vw)', maxHeight: '88vh', overflowY: 'auto', padding: '26px 24px 20px', borderRadius: 20 }}
+					>
+						<div className="code" style={{ fontSize: 30, color: 'var(--ink)' }}>共筆白板</div>
+						<div style={{ color: 'var(--ink-soft)', fontSize: 14, margin: '2px 0 18px' }}>開會時邊講,AI 幫你把重點整理成白板</div>
+						{(
+							[
+								['開始開會', '按左下「● 開始會議記錄」,正常講話 —— 停頓一下,AI 就把那段重點整理成便利貼。也可把逐字稿貼進面板按「丟給 agent」。'],
+								['顏色 = 類型', '__LEGEND__'],
+								['自己調整', '雙擊空白新增便利貼、雙擊卡片改字、拖拉移動;點一張卡可改色或刪除;「連線」把兩張卡的關係連起來。'],
+								['拉人一起', '右上「分享 / QR」—— 同事掃 QR 或輸入房號就進來,大家即時一起編輯。'],
+								['收尾', '按「會議摘要」,AI 一鍵產出一頁會議紀錄(決議 / 待辦 / 風險)。'],
+							] as [string, string][]
+						).map(([t, d], i) => (
+							<div key={i} style={{ display: 'flex', gap: 12, marginBottom: 14 }}>
+								<div style={{ flex: '0 0 24px', height: 24, borderRadius: '50%', background: 'var(--accent)', color: '#fff', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: 13, fontWeight: 600 }}>
+									{i + 1}
+								</div>
+								<div style={{ flex: 1 }}>
+									<div style={{ fontWeight: 600, fontSize: 14, marginBottom: 3 }}>{t}</div>
+									{d === '__LEGEND__' ? (
+										<div style={{ display: 'flex', gap: 14, flexWrap: 'wrap', fontSize: 13, color: 'var(--ink-soft)' }}>
+											{KIND_ORDER.map((c) => (
+												<span key={c} style={{ display: 'inline-flex', alignItems: 'center', gap: 5 }}>
+													<span style={{ width: 13, height: 13, borderRadius: 4, background: COLORS[c], display: 'inline-block' }} />
+													{KIND_LABEL[c]}
+												</span>
+											))}
+										</div>
+									) : (
+										<div style={{ fontSize: 13, color: 'var(--ink-soft)', lineHeight: 1.55 }}>{d}</div>
+									)}
+								</div>
+							</div>
+						))}
+						<button
+							style={{ width: '100%', marginTop: 6, padding: '11px', fontSize: 15, fontWeight: 600, background: 'var(--accent)', color: '#fff', borderColor: 'var(--accent)' }}
+							onClick={() => {
+								localStorage.setItem('wb-seen-guide', '1')
+								setGuide(false)
+							}}
+						>
+							開始使用
+						</button>
+					</div>
+				</div>
+			)}
 			<Stage
 				ref={stageRef}
 				width={size.w}
@@ -762,22 +828,28 @@ export default function App() {
 			<div className="glass float-in" style={bar}>
 				<span style={{ color: 'var(--ink-soft)', fontSize: 12 }}>房號</span>
 				<span className="code" style={{ fontSize: 19, color: 'var(--accent)', marginRight: 2 }}>{room}</span>
-				<button style={{ background: 'var(--accent)', color: '#fff', borderColor: 'var(--accent)' }} onClick={() => setShareOpen(true)}>
+				<button
+					title="分享這間會議室:QR、房號、邀請連結"
+					style={{ background: 'var(--accent)', color: '#fff', borderColor: 'var(--accent)' }}
+					onClick={() => setShareOpen(true)}
+				>
 					分享 / QR
 				</button>
-				<span style={{ color: '#888' }}>{status}</span>
-				<span style={{ color: '#888' }}>{shapes.length} 張 · {connectors.length} 連線</span>
-				<button style={btn} onClick={() => addSticky(140, 140, '', 'yellow') && undefined}>
+				<span style={{ color: 'var(--ink-soft)', fontSize: 12 }} title={status === 'synced' ? '已即時連線' : status}>
+					{status === 'synced' ? '已連線' : status} · {shapes.length} 張
+				</span>
+				<button title="新增一張空白便利貼(也可雙擊白板空白處)" style={btn} onClick={() => addSticky(140, 140, '', 'yellow') && undefined}>
 					＋ 便利貼
 				</button>
 				<button
-					style={{ ...btn, background: connectMode ? '#dbeafe' : undefined }}
+					title="開啟後,依序點兩張便利貼,畫出一條關係箭頭"
+					style={{ ...btn, ...(connectMode ? { background: 'var(--accent-soft)', borderColor: 'var(--accent)', color: 'var(--accent)' } : {}) }}
 					onClick={() => {
 						setConnectMode((v) => !v)
 						setConnectFrom(null)
 					}}
 				>
-					{connectMode ? '連線模式:開(點兩張)' : '連線模式'}
+					{connectMode ? '連線中:點兩張' : '連線'}
 				</button>
 				<button style={btn} title="復原 Ctrl+Z" onClick={() => undoMgr.undo()}>
 					↶
@@ -787,6 +859,7 @@ export default function App() {
 				</button>
 				<button
 					style={btn}
+					title="刪除目前選取的便利貼或連線(快捷鍵 Delete)"
 					onClick={() => {
 						if (selectedId) deleteSticky(selectedId)
 						else if (selectedConnId) deleteConnector(selectedConnId)
@@ -795,29 +868,77 @@ export default function App() {
 					刪除選取
 				</button>
 				<button
-					style={{ ...btn, background: '#fef9c3' }}
+					title="用 AI 把整張板整理成一頁會議紀錄(重點/決議/待辦/風險)"
+					style={{ ...btn, background: '#fef3c7' }}
 					onClick={() => window.open(`${SYNC_HTTP}/api/summary/${encodeURIComponent(room)}`, '_blank')}
 				>
 					會議摘要
 				</button>
-				<button style={btn} onClick={exportMd}>
+				<button style={btn} title="下載 markdown 會議紀錄" onClick={exportMd}>
 					匯出 MD
 				</button>
-				<button style={btn} onClick={exportPng}>
+				<button style={btn} title="下載白板圖片 (PNG)" onClick={exportPng}>
 					匯出 PNG
 				</button>
-				<button style={btn} onClick={() => setView({ x: 0, y: 0, scale: 1 })}>
+				<button style={btn} title="視圖回到原點與原始縮放" onClick={() => setView({ x: 0, y: 0, scale: 1 })}>
 					回正
 				</button>
 				<button
 					style={btn}
+					title="清空整個房間(會清掉所有人的板,請小心)"
 					onClick={() => {
 						if (window.confirm('清空整個房間給所有人?')) clearAll()
 					}}
 				>
 					清空
 				</button>
+				<button style={btn} title="使用說明 / 新手引導" onClick={() => setGuide(true)}>
+					?
+				</button>
 			</div>
+
+			{/* contextual color + delete popover for a selected sticky */}
+			{selectedId &&
+				byId(selectedId) &&
+				(() => {
+					const s = byId(selectedId)!
+					const left = Math.max(8, Math.min(view.x + s.x * view.scale, size.w - 230))
+					const top = Math.max(8, view.y + s.y * view.scale - 48)
+					return (
+						<div
+							className="glass float-in"
+							style={{ position: 'fixed', left, top, zIndex: 1500, display: 'flex', gap: 7, alignItems: 'center', padding: '5px 9px' }}
+						>
+							<span style={{ fontSize: 12, color: 'var(--ink-soft)' }}>改色</span>
+							{KIND_ORDER.map((c) => (
+								<button
+									key={c}
+									title={KIND_LABEL[c]}
+									onClick={() => patchShape(selectedId, { color: c })}
+									style={{
+										width: 22,
+										height: 22,
+										padding: 0,
+										borderRadius: '50%',
+										background: COLORS[c],
+										border: s.color === c ? '2px solid var(--ink)' : '2px solid #fff',
+										boxShadow: '0 1px 3px rgba(28,26,23,0.25)',
+									}}
+								/>
+							))}
+							<button
+								title="刪除這張 (Delete)"
+								style={{ color: '#b91c1c', padding: '4px 9px' }}
+								onClick={() => {
+									deleteSticky(selectedId)
+									setSelectedId(null)
+								}}
+							>
+								刪除
+							</button>
+						</div>
+					)
+				})()}
 
 			{/* hint (desktop only) */}
 			{!mobile && (
@@ -842,7 +963,7 @@ export default function App() {
 							placeholder="貼一段會議逐字稿…"
 							style={{ width: '100%', height: 70, font: '12px system-ui', resize: 'vertical', boxSizing: 'border-box', marginTop: 6 }}
 						/>
-						<button style={{ ...btn, width: '100%', marginTop: 6 }} onClick={runAgent}>
+						<button title="把上面這段逐字稿交給 AI,整理成彩色便利貼" style={{ ...btn, width: '100%', marginTop: 6 }} onClick={runAgent}>
 							丟給 agent
 						</button>
 					</>
@@ -859,12 +980,14 @@ export default function App() {
 						color: '#fff',
 						borderColor: meeting ? 'var(--live)' : 'var(--ink)',
 					}}
+					title="連續錄音:邊講邊整理,停頓會自動斷句上板;再按一次停止"
 					onClick={() => (meeting ? stopMeeting() : startMeeting())}
 				>
 					{meeting ? `■ 停止會議記錄（已整理 ${segCount} 段）` : '● 開始會議記錄'}
 				</button>
 				<button
 					style={{ ...btn, width: '100%', marginTop: 6, fontSize: 12, background: recording ? '#fecaca' : '#f3f4f6' }}
+					title="只錄一段:按開始、講話、再按停止"
 					onClick={toggleRecord}
 					disabled={meeting}
 				>
