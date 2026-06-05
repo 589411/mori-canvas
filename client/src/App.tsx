@@ -183,6 +183,7 @@ export default function App() {
 	const [pngTransparent, setPngTransparent] = useState(false)
 	const [settingsOpen, setSettingsOpen] = useState(false)
 	const [settings, setSettings] = useState({ localOnly: false, groqKey: true, spacing: 1, autoTidy: true })
+	const [cfgInfo, setCfgInfo] = useState({ llmGroqModel: '', llmOllamaModel: '', sttProvider: '', sttGroqModel: '', sttLocalModel: '' })
 	const [subtitle, setSubtitle] = useState('') // transient STT caption (UX feedback)
 	const subtitleTimer = useRef<any>(null)
 
@@ -403,7 +404,11 @@ export default function App() {
 	useEffect(() => {
 		fetch(`${SYNC_HTTP}/api/settings`)
 			.then((x) => x.json())
-			.then((r) => r?.ok && setSettings({ localOnly: r.localOnly, groqKey: r.groqKey, spacing: r.spacing, autoTidy: r.autoTidy }))
+			.then((r) => {
+				if (!r?.ok) return
+				setSettings({ localOnly: r.localOnly, groqKey: r.groqKey, spacing: r.spacing, autoTidy: r.autoTidy })
+				setCfgInfo({ llmGroqModel: r.llmGroqModel, llmOllamaModel: r.llmOllamaModel, sttProvider: r.sttProvider, sttGroqModel: r.sttGroqModel, sttLocalModel: r.sttLocalModel })
+			})
 			.catch(() => {})
 	}, [])
 
@@ -1435,6 +1440,21 @@ export default function App() {
 						</div>
 						<div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 18 }}>
 							{settings.localOnly ? '逐字稿與內容只用本機模型、不出網(較慢)。' : '用雲端 Groq(快,需 API key);連不到時自動退回本機。'}
+						</div>
+
+						<div style={{ fontWeight: 600, fontSize: 14, marginBottom: 6 }}>語音轉文字(Whisper)與模型</div>
+						<div style={{ fontSize: 12, color: 'var(--ink-soft)', lineHeight: 1.6, marginBottom: 8 }}>
+							STT 由 <b>mori-ear</b> 處理,下列設定在<b>共用的 ~/.mori/config.json</b>(整個 Mori 宇宙共用,改了會影響其他工具;mori-ear 每次轉錄都會重讀,不用重啟本服務)。
+						</div>
+						<div style={{ fontSize: 12.5, background: 'rgba(28,26,23,0.04)', border: '1px solid var(--line)', borderRadius: 10, padding: '10px 12px', lineHeight: 1.8, marginBottom: 18 }}>
+							<div>· <b>STT 來源</b> <code>stt_provider</code> = <b>{cfgInfo.sttProvider || '?'}</b>(groq=雲端 Whisper / local=本機 / auto)</div>
+							<div>· <b>雲端 Whisper 模型</b> <code>providers.groq.stt_model</code> = {cfgInfo.sttGroqModel || '?'}</div>
+							<div>· <b>本機 Whisper 模型</b> <code>whisper-local.model_path</code>:</div>
+							<div style={{ wordBreak: 'break-all', paddingLeft: 14, color: 'var(--ink)' }}>{cfgInfo.sttLocalModel || '?'}</div>
+							<div style={{ color: 'var(--ink-soft)', paddingLeft: 14 }}>(檔名含 small = CPU Small 版;換成 V3 Turbo 的 .bin = GPU 版)</div>
+							<hr style={{ border: 0, borderTop: '1px solid var(--line)', margin: '8px 0' }} />
+							<div>· <b>AI 整理模型</b> 雲端 <code>providers.groq.model</code> = {cfgInfo.llmGroqModel || '?'}</div>
+							<div>· 本機 <code>providers.ollama.model</code> = {cfgInfo.llmOllamaModel || '?'}</div>
 						</div>
 
 						<div style={{ fontWeight: 600, fontSize: 14, marginBottom: 6 }}>自動排列間距</div>

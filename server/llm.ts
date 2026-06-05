@@ -81,6 +81,19 @@ export function llmStatus(): { localOnly: boolean; groqKey: boolean } {
 	return { localOnly, groqKey: !!groqKey() }
 }
 
+// the actual models/STT config (read-only) so the settings page can SHOW + explain
+// what's configured. These live in the shared ~/.mori/config.json (mori-ear reads it).
+export function configInfo() {
+	const c = moriConfig()
+	return {
+		llmGroqModel: c?.providers?.groq?.model ?? 'openai/gpt-oss-120b',
+		llmOllamaModel: c?.providers?.ollama?.model ?? 'qwen3:8b',
+		sttProvider: c?.stt_provider ?? c?.providers?.groq?.stt_provider ?? 'groq', // groq | local | auto
+		sttGroqModel: c?.providers?.groq?.stt_model ?? 'whisper-large-v3-turbo',
+		sttLocalModel: c?.providers?.['whisper-local']?.model_path ?? c?.['whisper-local']?.model_path ?? '(未設定)',
+	}
+}
+
 /** Try Groq first; on any failure fall back to local Ollama. */
 export async function chat(messages: Msg[], opts: { json?: boolean } = {}): Promise<{ text: string; provider: string }> {
 	const json = !!opts.json

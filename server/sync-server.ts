@@ -26,7 +26,7 @@ import { join as pathJoin } from 'node:path'
 import { planAgent, planCardEdit, type BoardPlan, type ExistingCard, type AgentCommand } from './agent.ts'
 import { boardType, BOARD_TYPES, DEFAULT_BOARD_TYPE } from './board-types.ts'
 import { transcribe } from './stt.ts'
-import { chat, setLocalOnly, llmStatus } from './llm.ts'
+import { chat, setLocalOnly, llmStatus, configInfo } from './llm.ts'
 
 // runtime settings adjustable from the page's ⚙ (not hardcoded). Global to the server.
 const SETTINGS = { spacing: 1, autoTidy: true }
@@ -1062,7 +1062,7 @@ app.post('/api/rooms/:room/meta', (req, res) => {
 })
 
 // page settings: AI processing (cloud/local) + auto-arrange tuning (not hardcoded)
-app.get('/api/settings', (_req, res) => res.json({ ok: true, ...llmStatus(), spacing: SETTINGS.spacing, autoTidy: SETTINGS.autoTidy }))
+app.get('/api/settings', (_req, res) => res.json({ ok: true, ...llmStatus(), ...configInfo(), spacing: SETTINGS.spacing, autoTidy: SETTINGS.autoTidy }))
 app.post('/api/settings', (req, res) => {
 	if (typeof req.body?.localOnly === 'boolean') setLocalOnly(req.body.localOnly)
 	if (typeof req.body?.spacing === 'number') SETTINGS.spacing = Math.min(2, Math.max(0.6, req.body.spacing))
