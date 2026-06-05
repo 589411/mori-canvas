@@ -23,6 +23,6 @@ services:
       - key: SPONSOR_LABEL
         value: 請我喝杯咖啡
       - key: DEMO_NOTICE
-        value: 試玩版:AI 由站長 API 處理請手下留情;資料不會永久保存,想留著請用「匯出→下載畫板檔」🙏
+        value: 試玩版:AI 由站長 API 處理請手下留情;資料不會永久保存,想留著請用「匯出→下載畫板檔」
       # NOTE: do NOT set HTTPS — Render terminates TLS at the edge; the container serves HTTP.
       # PORT is injected by Render automatically; the server binds it on 0.0.0.0.
