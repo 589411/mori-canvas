@@ -157,6 +157,7 @@ export default function App() {
 	const [frames, setFrames] = useState<any[]>([]) // diagrams on the canvas
 	const [typePickerOpen, setTypePickerOpen] = useState(false)
 	const [newFrameTitle, setNewFrameTitle] = useState('')
+	const [pngMenu, setPngMenu] = useState(false)
 	const [subtitle, setSubtitle] = useState('') // transient STT caption (UX feedback)
 	const subtitleTimer = useRef<any>(null)
 
@@ -220,7 +221,10 @@ export default function App() {
 		if (c && c !== room) location.href = `${location.pathname}?room=${encodeURIComponent(c)}`
 	}
 	function tidy() {
-		fetch(`${SYNC_HTTP}/api/rooms/${encodeURIComponent(room)}/tidy`, { method: 'POST' }).catch(() => {})
+		setBusy('重新排列中…')
+		fetch(`${SYNC_HTTP}/api/rooms/${encodeURIComponent(room)}/tidy`, { method: 'POST' })
+			.then(() => setBusy('已依各圖的板型重新排列'))
+			.catch(() => setBusy('排列失敗'))
 	}
 	// set this board's type/topic (server-side, authoritative) then re-arrange
 	async function setBoardType(key: string, topic?: string) {
@@ -238,13 +242,34 @@ export default function App() {
 		if (subtitleTimer.current) clearTimeout(subtitleTimer.current)
 		subtitleTimer.current = setTimeout(() => setSubtitle(''), 3000)
 	}
-	function exportPng() {
-		const uri = stageRef.current?.toDataURL({ pixelRatio: 2 })
-		if (!uri) return
+	function downloadUri(uri: string) {
 		const a = document.createElement('a')
 		a.href = uri
 		a.download = `whiteboard-${room}.png`
 		a.click()
+	}
+	// the Konva stage canvas is transparent (the paper grid is CSS, not drawn).
+	// transparent=true exports as-is; otherwise composite onto a paper background.
+	function exportPng(transparent: boolean) {
+		const stage = stageRef.current
+		if (!stage) return
+		const dataUrl = stage.toDataURL({ pixelRatio: 2 })
+		if (transparent) {
+			downloadUri(dataUrl)
+			return
+		}
+		const img = new Image()
+		img.onload = () => {
+			const c = document.createElement('canvas')
+			c.width = img.width
+			c.height = img.height
+			const ctx = c.getContext('2d')!
+			ctx.fillStyle = '#f1ece1' // paper
+			ctx.fillRect(0, 0, c.width, c.height)
+			ctx.drawImage(img, 0, 0)
+			downloadUri(c.toDataURL('image/png'))
+		}
+		img.src = dataUrl
 	}
 
 	useEffect(() => {
@@ -1202,11 +1227,11 @@ export default function App() {
 				<button style={btn} title="下載 markdown 會議紀錄" onClick={exportMd}>
 					匯出 MD
 				</button>
-				<button style={btn} title="下載白板圖片 (PNG)" onClick={exportPng}>
+				<button style={btn} title="下載白板圖片 (PNG) —— 可選透明底或白底" onClick={() => setPngMenu((v) => !v)}>
 					匯出 PNG
 				</button>
 				<button
-					title="自動把便利貼按類型分欄排整齊(主題/待辦/決議/風險各一欄)"
+					title="把每一張圖的便利貼依它的板型重新排整齊(會議=分欄、組織/流程=樹、心智圖=放射…)。手動移動亂了之後按這個歸位。"
 					style={{ ...btn, background: 'var(--accent-soft)', borderColor: 'var(--accent)', color: 'var(--accent)' }}
 					onClick={tidy}
 				>
@@ -1330,6 +1355,18 @@ export default function App() {
 							</button>
 						))}
 					</div>
+				</div>
+			)}
+
+			{/* PNG export: transparent or paper background */}
+			{pngMenu && (
+				<div
+					className="glass float-in"
+					style={{ position: 'fixed', bottom: mobile ? 96 : 72, left: '50%', transform: 'translateX(-50%)', zIndex: 1600, display: 'flex', gap: 8, alignItems: 'center', padding: '7px 12px', fontSize: 13 }}
+				>
+					<span style={{ color: 'var(--ink-soft)', fontSize: 12 }}>PNG 背景</span>
+					<button onClick={() => { exportPng(false); setPngMenu(false) }}>紙底(白)</button>
+					<button onClick={() => { exportPng(true); setPngMenu(false) }}>透明底</button>
 				</div>
 			)}
 
