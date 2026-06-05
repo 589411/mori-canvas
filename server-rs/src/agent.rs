@@ -355,3 +355,79 @@ pub async fn plan_card_edit(transcript: &str, text: &str, owner: Option<&str>, t
     }
     Ok(edit)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn extract_json_strips_fences_and_think() {
+        assert!(extract_json("```json\n{\"a\":1}\n```").is_some());
+        assert!(extract_json("<think>reasoning…</think>\n{\"a\":1}").unwrap().get("a").is_some());
+        assert!(extract_json("no json here").is_none());
+    }
+
+    fn cmd(raw: &str, existing: usize) -> Option<AgentCommand> {
+        match parse_result(raw, existing) {
+            AgentResult::Command(c) => Some(c),
+            _ => None,
+        }
+    }
+
+    #[test]
+    fn parses_edit_command() {
+        let c = cmd(r#"{"intent":"command","command":{"action":"edit","index":0,"text":"季繳方案"}}"#, 2);
+        assert!(matches!(c, Some(AgentCommand::Edit { index: 0, .. })));
+    }
+
+    #[test]
+    fn parses_move_and_zones() {
+        assert!(matches!(
+            cmd(r#"{"intent":"command","command":{"action":"move","index":1,"frame":2}}"#, 3),
+            Some(AgentCommand::Move { index: 1, frame: 2 })
+        ));
+        match cmd(r#"{"intent":"command","command":{"action":"zones","titles":["臨時動議","待討論"]}}"#, 0) {
+            Some(AgentCommand::Zones { titles }) => assert_eq!(titles, vec!["臨時動議", "待討論"]),
+            other => panic!("expected zones, got {:?}", matches!(other, Some(_))),
+        }
+    }
+
+    #[test]
+    fn edit_out_of_range_is_rejected() {
+        // index 5 but only 1 existing card -> not a valid command -> falls back to content
+        assert!(cmd(r#"{"intent":"command","command":{"action":"edit","index":5,"text":"X"}}"#, 1).is_none());
+    }
+
+    #[test]
+    fn parses_content_with_stickies_and_connectors() {
+        let r = parse_result(r#"{"intent":"content","stickies":[{"text":"A","color":"yellow"},{"text":"B","color":"green"}],"connectors":[{"from":0,"to":1}]}"#, 0);
+        match r {
+            AgentResult::Content(p) => {
+                assert_eq!(p.stickies.len(), 2);
+                assert_eq!(p.connectors, vec![(0, 1)]);
+            }
+            _ => panic!("expected content"),
+        }
+    }
+
+    #[test]
+    fn kind_maps_to_color() {
+        let r = parse_result(r#"{"intent":"content","stickies":[{"text":"待辦事項","kind":"todo"}]}"#, 0);
+        if let AgentResult::Content(p) = r {
+            assert_eq!(p.stickies[0].color, "green"); // todo -> green
+        } else {
+            panic!()
+        }
+    }
+
+    #[test]
+    fn bad_connector_index_dropped() {
+        // connector referencing index 9 (out of range) is dropped, not panicked
+        let r = parse_result(r#"{"intent":"content","stickies":[{"text":"A"}],"connectors":[{"from":0,"to":9}]}"#, 0);
+        if let AgentResult::Content(p) = r {
+            assert!(p.connectors.is_empty());
+        } else {
+            panic!()
+        }
+    }
+}
