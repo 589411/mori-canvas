@@ -77,6 +77,28 @@
 
 ---
 
+## 語音(STT)三條路 —— ⚙ 設定裡切
+
+白板可以**獨立運作、不一定要 mori-ear**(對「要賣給別人」很重要)。設定頁「處理方式」:
+
+| 模式 | STT 怎麼來 | 適合 |
+|---|---|---|
+| **Mori 處理** | 委派 `mori-ear`(它自己決定本機 whisper / Groq);僅在偵測到 mori-ear 時可選 | 你自己、已裝 Mori |
+| **自訂 · 雲端** | Groq Whisper API,填**自己的 Groq key** | 客戶**零安裝**,首選 |
+| **自訂 · 本機** | 打一台本機 **whisper-server**(`/inference`);需自行安裝 | 不想資料出網 |
+
+「自訂」模式由白板自己處理,且**送 STT 前會先做靜音剪**(ffmpeg),避免 Whisper 對靜音產生幻覺(例如硬掰出「(字幕製作:貝爾)」)。
+
+**自訂 · 本機 要裝 whisper-server**(Linux):
+```bash
+sudo apt install build-essential cmake ffmpeg   # GPU 另加 nvidia-cuda-toolkit
+bash scripts/setup-whisper-linux.sh             # 從源碼編 whisper-server,自動偵測 GPU/CPU
+bash whisper/run-whisper.sh                      # 啟動在 127.0.0.1:8089
+```
+然後 ⚙ 設定 → 自訂 → 本機 whisper,網址填 `http://127.0.0.1:8089/inference`(留空則自動偵測 `~/.mori/whisper-server.json`)。Windows 可抓 whisper.cpp 官方 release 的 `whisper-server`(GPU 版多半要自編)。`WHISPER_MODEL=large-v3-turbo bash scripts/setup-whisper-linux.sh` 可換大模型(GPU 才跑得動)。
+
+---
+
 ## 跑起來
 
 ```bash

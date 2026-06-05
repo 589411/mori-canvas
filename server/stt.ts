@@ -19,7 +19,7 @@ import { groqKey } from './llm.ts'
 
 const execFileP = promisify(execFile)
 
-export type SttOpts = { mode?: 'mori' | 'custom'; sttSource?: 'cloud' | 'local' }
+export type SttOpts = { mode?: 'mori' | 'custom'; sttSource?: 'cloud' | 'local'; whisperUrl?: string }
 
 function earPath(): string {
 	if (process.env.MORI_EAR_BIN) return process.env.MORI_EAR_BIN
@@ -82,16 +82,21 @@ async function groqWhisper(path: string): Promise<string> {
 	return String(d?.text ?? '').trim()
 }
 
-async function localWhisper(path: string): Promise<string> {
-	const w = whisperServer() ?? { host: '127.0.0.1', port: 36969, path: '/inference' }
+async function localWhisper(path: string, urlOverride?: string): Promise<string> {
+	// explicit URL (settings) wins; else the Mori whisper-server descriptor; else a default.
+	let url = urlOverride?.trim()
+	if (!url) {
+		const w = whisperServer() ?? { host: '127.0.0.1', port: 36969, path: '/inference' }
+		url = `http://${w.host}:${w.port}${w.path}`
+	}
 	const fd = new FormData()
 	fd.append('file', new Blob([await readFile(path)]), 'audio.wav')
 	fd.append('response_format', 'json')
 	let res: Response
 	try {
-		res = await fetch(`http://${w.host}:${w.port}${w.path}`, { method: 'POST', body: fd })
+		res = await fetch(url, { method: 'POST', body: fd })
 	} catch (e) {
-		throw new Error(`本機 whisper-server 連不到 ${w.host}:${w.port} — 有啟動嗎?(${(e as Error).message})`)
+		throw new Error(`本機 whisper-server 連不到 ${url} — 有啟動嗎?(${(e as Error).message})`)
 	}
 	if (!res.ok) throw new Error(`whisper-server ${res.status}`)
 	const d: any = await res.json()
@@ -108,7 +113,7 @@ export async function transcribe(audioPath: string, opts: SttOpts = {}): Promise
 	const trimmed = await trimSilence(audioPath)
 	try {
 		if ((await durationSec(trimmed)) < 0.35) return '' // basically silence → skip
-		return opts.sttSource === 'local' ? await localWhisper(trimmed) : await groqWhisper(trimmed)
+		return opts.sttSource === 'local' ? await localWhisper(trimmed, opts.whisperUrl) : await groqWhisper(trimmed)
 	} finally {
 		if (trimmed !== audioPath) unlink(trimmed).catch(() => {})
 	}

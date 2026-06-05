@@ -182,7 +182,7 @@ export default function App() {
 	const [exportOpen, setExportOpen] = useState(false)
 	const [pngTransparent, setPngTransparent] = useState(false)
 	const [settingsOpen, setSettingsOpen] = useState(false)
-	const [settings, setSettings] = useState({ localOnly: false, groqKey: true, spacing: 1, autoTidy: true, mode: 'mori', sttSource: 'local' })
+	const [settings, setSettings] = useState({ localOnly: false, groqKey: true, spacing: 1, autoTidy: true, mode: 'mori', sttSource: 'local', whisperUrl: '' })
 	const [caps, setCaps] = useState({ moriEar: true, whisperServer: true, groqKey: true })
 	const [cfgInfo, setCfgInfo] = useState({ llmGroqModel: '', llmOllamaModel: '', sttProvider: '', sttGroqModel: '', sttLocalModel: '' })
 	const [subtitle, setSubtitle] = useState('') // transient STT caption (UX feedback)
@@ -262,7 +262,7 @@ export default function App() {
 			.then((x) => x.json())
 			.catch(() => null)
 		if (r?.ok) {
-			setSettings({ localOnly: r.localOnly, groqKey: r.groqKey, spacing: r.spacing, autoTidy: r.autoTidy, mode: r.mode, sttSource: r.sttSource })
+			setSettings({ localOnly: r.localOnly, groqKey: r.groqKey, spacing: r.spacing, autoTidy: r.autoTidy, mode: r.mode, sttSource: r.sttSource, whisperUrl: r.whisperUrl || '' })
 			setCaps({ moriEar: r.moriEar, whisperServer: r.whisperServer, groqKey: r.groqKey })
 		}
 		if (patch.spacing !== undefined) tidy() // re-arrange so the new spacing shows immediately
@@ -410,7 +410,7 @@ export default function App() {
 			.then((x) => x.json())
 			.then((r) => {
 				if (!r?.ok) return
-				setSettings({ localOnly: r.localOnly, groqKey: r.groqKey, spacing: r.spacing, autoTidy: r.autoTidy, mode: r.mode, sttSource: r.sttSource })
+				setSettings({ localOnly: r.localOnly, groqKey: r.groqKey, spacing: r.spacing, autoTidy: r.autoTidy, mode: r.mode, sttSource: r.sttSource, whisperUrl: r.whisperUrl || '' })
 				setCaps({ moriEar: r.moriEar, whisperServer: r.whisperServer, groqKey: r.groqKey })
 				setCfgInfo({ llmGroqModel: r.llmGroqModel, llmOllamaModel: r.llmOllamaModel, sttProvider: r.sttProvider, sttGroqModel: r.sttGroqModel, sttLocalModel: r.sttLocalModel })
 			})
@@ -1457,13 +1457,22 @@ export default function App() {
 													本機 whisper
 												</button>
 											</div>
-											<div style={{ fontSize: 11.5, color: 'var(--ink-soft)', marginBottom: 12, lineHeight: 1.6 }}>
+											<div style={{ fontSize: 11.5, color: 'var(--ink-soft)', marginBottom: 8, lineHeight: 1.6 }}>
 												{settings.sttSource === 'local'
 													? caps.whisperServer
-														? '打你本機的 whisper-server（/inference）。GPU 或 CPU 版自己裝(做法同 meeting-recorder)。'
-														: '⚠ 沒偵測到本機 whisper-server,要先自行安裝並啟動。'
-													: '用你自己的 Groq API key 打 Groq Whisper。'}
+														? '打你本機的 whisper-server（/inference）。沒裝的話跑 scripts/setup-whisper-linux.sh(自動偵測 GPU/CPU 編譯)。'
+														: '⚠ 沒偵測到本機 whisper-server。跑 scripts/setup-whisper-linux.sh 安裝,或下方填你自己的網址。'
+													: '用你自己的 Groq API key 打 Groq Whisper(零安裝)。'}
 											</div>
+											{settings.sttSource === 'local' && (
+												<input
+													value={settings.whisperUrl}
+													onChange={(e) => setSettings((s) => ({ ...s, whisperUrl: e.target.value }))}
+													onBlur={(e) => saveSettings({ whisperUrl: e.target.value })}
+													placeholder="whisper-server 網址(留空=自動偵測,例 http://127.0.0.1:8089/inference)"
+													style={{ width: '100%', fontSize: 12, padding: '6px 8px', border: '1px solid var(--line)', borderRadius: 8, boxSizing: 'border-box', marginBottom: 12 }}
+												/>
+											)}
 											<div style={{ fontWeight: 600, fontSize: 13, marginBottom: 6 }}>文字理解(LLM)</div>
 											<div style={{ display: 'flex', gap: 8 }}>
 												<button disabled={!caps.groqKey} onClick={() => saveSettings({ localOnly: false })} style={{ flex: 1, ...(!settings.localOnly ? ON : {}) }}>

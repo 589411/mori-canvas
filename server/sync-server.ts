@@ -35,8 +35,9 @@ const SETTINGS = {
 	autoTidy: true,
 	mode: (_cap0.moriEar ? 'mori' : 'custom') as 'mori' | 'custom', // STT processing: Mori ecosystem vs standalone
 	sttSource: (_cap0.whisperServer ? 'local' : 'cloud') as 'cloud' | 'local', // used in custom mode
+	whisperUrl: '', // custom-local whisper-server URL ('' = auto-detect ~/.mori/whisper-server.json or default)
 }
-const sttOpts = () => ({ mode: SETTINGS.mode, sttSource: SETTINGS.sttSource })
+const sttOpts = () => ({ mode: SETTINGS.mode, sttSource: SETTINGS.sttSource, whisperUrl: SETTINGS.whisperUrl })
 const sp = () => SETTINGS.spacing
 
 const PORT = 1234
@@ -1075,6 +1076,7 @@ const settingsPayload = () => ({
 	...sttCapabilities(),
 	mode: SETTINGS.mode,
 	sttSource: SETTINGS.sttSource,
+	whisperUrl: SETTINGS.whisperUrl,
 	spacing: SETTINGS.spacing,
 	autoTidy: SETTINGS.autoTidy,
 })
@@ -1083,6 +1085,7 @@ app.post('/api/settings', (req, res) => {
 	if (typeof req.body?.localOnly === 'boolean') setLocalOnly(req.body.localOnly)
 	if (req.body?.mode === 'mori' || req.body?.mode === 'custom') SETTINGS.mode = req.body.mode
 	if (req.body?.sttSource === 'cloud' || req.body?.sttSource === 'local') SETTINGS.sttSource = req.body.sttSource
+	if (typeof req.body?.whisperUrl === 'string') SETTINGS.whisperUrl = req.body.whisperUrl.trim().slice(0, 200)
 	if (typeof req.body?.spacing === 'number') SETTINGS.spacing = Math.min(2, Math.max(0.6, req.body.spacing))
 	if (typeof req.body?.autoTidy === 'boolean') SETTINGS.autoTidy = req.body.autoTidy
 	res.json({ ok: true, ...settingsPayload() })
