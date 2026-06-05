@@ -165,22 +165,25 @@ export default function App() {
 	const shareHost = isLocalHostPage && lanIp ? lanIp : location.hostname
 	const shareUrl = `${location.protocol}//${shareHost}${location.port ? ':' + location.port : ''}${location.pathname}?room=${encodeURIComponent(room)}`
 
-	const { doc, yShapes, yConnectors, yMeta, yFrames, provider, undoMgr, LOCAL } = useMemo(() => {
+	const { doc, yShapes, yConnectors, yMeta, yFrames, yTranscript, provider, undoMgr, LOCAL } = useMemo(() => {
 		const doc = new Y.Doc()
 		const provider = new WebsocketProvider(SYNC_WS, room, doc)
 		const yShapes = doc.getMap<Sticky>('shapes')
 		const yConnectors = doc.getMap<Connector>('connectors')
 		const yMeta = doc.getMap<string>('meta') // board type + topic
 		const yFrames = doc.getMap<any>('frames') // diagrams on the canvas
+		const yTranscript = doc.getArray<any>('transcript') // running word-for-word meeting log
 		const LOCAL = { local: true } // origin tag so undo only tracks MY edits, not remote/Mori
 		const undoMgr = new Y.UndoManager([yShapes, yConnectors], { trackedOrigins: new Set([LOCAL]) })
 		;(window as any).__getShapes = () => Array.from(yShapes.values())
 		;(window as any).__getConnectors = () => Array.from(yConnectors.values())
 		;(window as any).__getFrames = () => Array.from(yFrames.values())
-		return { doc, yShapes, yConnectors, yMeta, yFrames, provider, undoMgr, LOCAL }
+		return { doc, yShapes, yConnectors, yMeta, yFrames, yTranscript, provider, undoMgr, LOCAL }
 	}, [room])
 
 	const [shapes, setShapes] = useState<Sticky[]>([])
+	const [transcript, setTranscript] = useState<any[]>([]) // running word-for-word meeting log
+	const transcriptEndRef = useRef<HTMLDivElement | null>(null)
 	const [connectors, setConnectors] = useState<Connector[]>([])
 	const [status, setStatus] = useState('connecting')
 	const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight })
@@ -236,6 +239,15 @@ export default function App() {
 		[]
 	)
 	const me = useMemo(() => ({ name: myName, color: myColor }), [myName, myColor])
+	// append a recognised speech segment to the shared word-for-word meeting log
+	const logTranscript = (text: string) => {
+		const t = (text || '').trim()
+		if (!t) return
+		doc.transact(() => yTranscript.push([{ t: new Date().toISOString(), by: me.name, text: t }]))
+	}
+	useEffect(() => {
+		transcriptEndRef.current?.scrollIntoView({ block: 'nearest' })
+	}, [transcript.length])
 	useEffect(() => {
 		localStorage.setItem('wb-name', myName)
 		;(provider as any).awareness.setLocalStateField('user', me)
@@ -361,6 +373,7 @@ export default function App() {
 				frames: Array.from(yFrames.values()),
 				shapes: Array.from(yShapes.values()),
 				connectors: Array.from(yConnectors.values()),
+				transcript: yTranscript.toArray(),
 			}
 			const blob = new Blob([JSON.stringify(board, null, 2)], { type: 'application/json' })
 			const a = document.createElement('a')
@@ -386,9 +399,11 @@ export default function App() {
 				for (const k of [...yShapes.keys()]) yShapes.delete(k)
 				for (const k of [...yConnectors.keys()]) yConnectors.delete(k)
 				for (const k of [...yFrames.keys()]) yFrames.delete(k)
+				if (yTranscript.length) yTranscript.delete(0, yTranscript.length)
 				for (const f of data.frames || []) if (f?.id) yFrames.set(f.id, f)
 				for (const s of data.shapes || []) if (s?.id) yShapes.set(s.id, s)
 				for (const c of data.connectors || []) if (c?.id) yConnectors.set(c.id, c)
+				if (Array.isArray(data.transcript) && data.transcript.length) yTranscript.push(data.transcript)
 				if (data.meta?.type) yMeta.set('type', data.meta.type)
 				if (data.meta?.topic != null) yMeta.set('topic', String(data.meta.topic))
 			})
@@ -435,14 +450,17 @@ export default function App() {
 			setBoardTopic((yMeta.get('topic') as string) || '')
 		}
 		const syncFrames = () => setFrames(Array.from(yFrames.values()))
+		const syncT = () => setTranscript(Array.from(yTranscript.toArray()))
 		sync()
 		syncC()
 		syncMeta()
 		syncFrames()
+		syncT()
 		yShapes.observe(sync)
 		yConnectors.observe(syncC)
 		yMeta.observe(syncMeta)
 		yFrames.observe(syncFrames)
+		yTranscript.observe(syncT)
 		// presence: track everyone else's cursors (Mori + other humans)
 		const aw = (provider as any).awareness
 		const updateCursors = () => {
@@ -744,6 +762,7 @@ export default function App() {
 			.then((x) => x.json())
 			.then((r) => {
 				showSubtitle(r.transcript) // UX: let the speaker see what was heard
+				logTranscript(r.transcript) // keep the word-for-word meeting log
 				applyAgentResponse(r) // a segment may be a spoken command, not content
 			})
 			.catch(() => {})
@@ -885,6 +904,7 @@ export default function App() {
 					{ method: 'POST', headers: { 'Content-Type': type }, body: blob }
 				).then((x) => x.json())
 				showSubtitle(r.transcript)
+				logTranscript(r.transcript)
 				applyAgentResponse(r, r.transcript ? `聽到「${r.transcript}」→ ` : '')
 			} catch (e) {
 				setBusy(`錯誤:${(e as Error).message}`)
@@ -1748,6 +1768,20 @@ export default function App() {
 							</>
 						)}
 					</>
+				)}
+				{panelOpen && transcript.length > 0 && (
+					<div style={{ marginTop: 10, borderTop: '1px solid var(--line)', paddingTop: 8 }}>
+						<div className="muted" style={{ fontSize: 11, marginBottom: 5 }}>逐字記錄 · {transcript.length} 段</div>
+						<div style={{ maxHeight: 150, overflowY: 'auto', fontSize: 12, lineHeight: 1.5 }}>
+							{transcript.map((e: any, i: number) => (
+								<div key={i} style={{ marginBottom: 4 }}>
+									<span className="muted" style={{ fontSize: 10 }}>{(e.t || '').slice(11, 16)} {e.by} </span>
+									{e.text}
+								</div>
+							))}
+							<div ref={transcriptEndRef} />
+						</div>
+					</div>
 				)}
 				{busy && <div style={{ marginTop: 6, fontSize: 12, color: 'var(--ink-soft)' }}>{busy}</div>}
 			</div>

@@ -62,6 +62,30 @@ pub fn apply_tidy(room: &Room, positions: &[(String, f64, f64)], frame_sizes: &[
     }
 }
 
+/// last `n` lines of the room's shared transcript log ("name:text"), oldest→newest —
+/// fed to the agent as discussion context so cards reflect the whole conversation.
+pub fn read_transcript_tail(room: &Room, n: usize) -> Vec<String> {
+    use yrs::types::ToJson;
+    use yrs::Array;
+    let doc = room.awareness.doc();
+    let arr = doc.get_or_insert_array("transcript");
+    let txn = doc.transact();
+    let all: Vec<Value> = arr.iter(&txn).map(|v| any_to_json(&v.to_json(&txn))).collect();
+    all.iter()
+        .rev()
+        .take(n)
+        .rev()
+        .filter_map(|j| {
+            let text = j.get("text").and_then(|x| x.as_str()).unwrap_or("").trim();
+            if text.is_empty() {
+                return None;
+            }
+            let by = j.get("by").and_then(|x| x.as_str()).unwrap_or("");
+            Some(if by.is_empty() { text.to_string() } else { format!("{}:{}", by, text) })
+        })
+        .collect()
+}
+
 pub fn frames_sorted(room: &Room) -> Vec<Value> {
     let mut f = read_map(room, "frames");
     f.sort_by(|a, b| a.get("id").and_then(|x| x.as_str()).unwrap_or("").cmp(b.get("id").and_then(|x| x.as_str()).unwrap_or("")));

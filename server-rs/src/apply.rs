@@ -282,7 +282,8 @@ pub async fn run_agent_turn(room: &Room, transcript: &str, by: &str, local_only:
     let (mtype, topic) = store::read_meta(room);
     let existing = existing_stickies(room);
     let frames = frames_info(room);
-    let (result, provider) = plan_agent(transcript, &existing, &topic, &frames, local_only).await?;
+    let context = store::read_transcript_tail(room, 10); // recent discussion context
+    let (result, provider) = plan_agent(transcript, &existing, &topic, &frames, &context, local_only).await?;
     match result {
         AgentResult::Command(cmd) => {
             let (label, view) = run_command(room, &existing, &cmd, spacing);
