@@ -1,0 +1,44 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1060" height="460" viewBox="0 0 1060 460">
+  <defs>
+    <pattern id="d1" width="26" height="26" patternUnits="userSpaceOnUse"><circle cx="2" cy="2" r="1.4" fill="#e3dccd"/></pattern>
+    <marker id="a1" markerWidth="9" markerHeight="9" refX="7" refY="4.5" orient="auto"><path d="M1 1 L8 4.5 L1 8" fill="none" stroke="#8a8276" stroke-width="1.8"/></marker>
+    <style>
+      .t{font-family:'Noto Sans TC';font-weight:900}
+      .b{font-family:'Noto Sans TC';font-weight:700}
+      .m{font-family:'Noto Sans TC';font-weight:500}
+    </style>
+  </defs>
+  <rect width="1060" height="460" fill="#faf7f1"/>
+  <rect width="1060" height="460" fill="url(#d1)" opacity="0.7"/>
+
+  <text x="40" y="50" class="t" font-size="27" fill="#b4530a">① 單機獨立執行 —— 自己的電腦跑</text>
+  <text x="40" y="78" class="m" font-size="16" fill="#6b655c">一顆 Rust binary 把前端、API、即時同步、AI 整理全包;其他人開瀏覽器連進來。</text>
+
+  <!-- people (left) -->
+  <g>
+    <rect x="42" y="178" width="150" height="104" rx="14" fill="#fffdf8" stroke="#e3dccd" stroke-width="1.5"/>
+    <text x="117" y="214" class="b" font-size="17" fill="#1c1a17" text-anchor="middle">其他人</text>
+    <text x="117" y="240" class="m" font-size="13.5" fill="#6b655c" text-anchor="middle">手機 / 筆電</text>
+    <text x="117" y="261" class="m" font-size="13.5" fill="#6b655c" text-anchor="middle">開瀏覽器 · 零安裝</text>
+  </g>
+  <line x1="194" y1="230" x2="296" y2="230" stroke="#8a8276" stroke-width="2.4" marker-end="url(#a1)"/>
+  <text x="245" y="220" class="m" font-size="13" fill="#8a8276" text-anchor="middle">同區網</text>
+
+  <!-- host machine (right, big) -->
+  <rect x="300" y="100" width="430" height="0"/>
+  <rect x="300" y="118" width="718" height="300" rx="20" fill="#16130f" opacity="0.07" transform="translate(0,6)"/>
+  <rect x="300" y="118" width="718" height="300" rx="20" fill="#fcf6ec" stroke="#e0d6c4" stroke-width="2"/>
+  <text x="324" y="150" class="b" font-size="18" fill="#1c1a17">你的電腦(主機)</text>
+  <text x="324" y="172" class="m" font-size="13.5" fill="#6b655c">資料留在這台的 <tspan class="b" fill="#8a3f06">.data/</tspan> —— 關了再開還在,不出你機器。</text>
+
+  <rect x="324" y="186" width="670" height="210" rx="14" fill="#fffdf8" stroke="#e3dccd" stroke-width="1.5"/>
+  <text x="344" y="214" class="b" font-size="15.5" fill="#b4530a">mori-canvas-server(一顆 binary)</text>
+  <g class="m" font-size="15" fill="#33302a">
+    <text x="344" y="250">・內嵌前端(網頁) · <tspan>/sync</tspan> 即時同步(yjs CRDT)</text>
+    <text x="344" y="288">・<tspan class="b" fill="#5a9e52">STT 語音</tspan> → 本機 whisper-server / mori-ear,或 Groq Whisper</text>
+    <text x="344" y="326">・<tspan class="b" fill="#3f76c0">AI 整理</tspan> → 本機 Ollama(qwen3),或 Groq gpt-oss-120b</text>
+    <text x="344" y="364">・板型排版、命名區、匯出 —— 全在本機算完同步回網頁</text>
+  </g>
+
+  <text x="40" y="446" class="m" font-size="14.5" fill="#6b655c">key 用你自己的 · 可全本機(離線也行)或走 Groq · 適合:團隊內部、要資料留自己、穩定使用。</text>
+</svg>
