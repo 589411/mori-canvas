@@ -17,11 +17,11 @@ services:
       # The real money-guard is a spending cap on your Groq account.
       - key: DEMO_RATE_PER_MIN
         value: "60"
-      # sponsor banner (optional). Set SPONSOR_URL in the dashboard to show the button.
+      # sponsor banner — public link, safe to keep here (the button points at it)
       - key: SPONSOR_URL
-        sync: false
+        value: https://buymeacoffee.com/yazelin
       - key: SPONSOR_LABEL
-        value: 贊助
+        value: 請我喝杯咖啡
       - key: DEMO_NOTICE
         value: 試玩版:AI 由站長 API 處理請手下留情;資料不會永久保存,想留著請用「匯出→下載畫板檔」🙏
       # NOTE: do NOT set HTTPS — Render terminates TLS at the edge; the container serves HTTP.
