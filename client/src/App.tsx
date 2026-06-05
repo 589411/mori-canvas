@@ -1358,98 +1358,38 @@ export default function App() {
 					)
 				})()}
 
-			{/* top toolbar */}
+						{/* room bar (top-centre) — who/where, sharing */}
 			<div className="glass float-in" style={bar}>
-				<span style={{ color: 'var(--ink-soft)', fontSize: 12 }}>房號</span>
+				<span className="muted" style={{ fontSize: 12 }}>房號</span>
 				<span className="code" style={{ fontSize: 19, color: 'var(--accent)', marginRight: 2 }}>{room}</span>
-				<button
-					title="分享這間會議室:QR、房號、邀請連結"
-					style={{ background: 'var(--accent)', color: '#fff', borderColor: 'var(--accent)' }}
-					onClick={() => setShareOpen(true)}
-				>
-					分享 / QR
-				</button>
-				<button
-					title="這個會議的畫布上可以有多張圖。AI 會在你切到新主題時自動開對應的圖;這裡可以手動新增一張。"
-					style={{ background: 'var(--accent-soft)', borderColor: 'var(--accent)', color: 'var(--accent)' }}
-					onClick={() => setTypePickerOpen(true)}
-				>
-					＋ 新圖{frames.length ? `（共 ${frames.length}）` : ''}
-				</button>
-				<span style={{ color: 'var(--ink-soft)', fontSize: 12 }} title={status === 'synced' ? '已即時連線' : status}>
+				<button title="分享這間會議室:QR、房號、邀請連結" className="btn-accent" onClick={() => setShareOpen(true)}>分享 / QR</button>
+				<span className="muted" style={{ fontSize: 12 }} title={status === 'synced' ? '已即時連線' : status}>
 					{status === 'synced' ? '已連線' : status} · {shapes.length} 張
 				</span>
-				<button title="新增一張空白便利貼(也可雙擊白板空白處)" style={btn} onClick={() => addSticky(140, 140, '', 'yellow') && undefined}>
-					＋ 便利貼
-				</button>
-				<button
-					title="新增一張備註。備註是隨手註記,任何圖表都能貼;自動排列與 AI 都不會動它,放哪就在哪。"
-					style={{ ...btn, background: COLORS.note, borderColor: KIND_ACCENT.note }}
-					onClick={() => addNote(180, 180) && undefined}
-				>
-					＋ 備註
-				</button>
-				<button
-					title="開啟後,依序點兩張便利貼,畫出一條關係箭頭"
-					style={{ ...btn, ...(connectMode ? { background: 'var(--accent-soft)', borderColor: 'var(--accent)', color: 'var(--accent)' } : {}) }}
-					onClick={() => {
-						setConnectMode((v) => !v)
-						setConnectFrom(null)
-					}}
-				>
-					{connectMode ? '連線中:點兩張' : '連線'}
-				</button>
-				<button style={btn} title="復原 Ctrl+Z" onClick={() => undoMgr.undo()}>
-					↶
-				</button>
-				<button style={btn} title="重做 Ctrl+Shift+Z" onClick={() => undoMgr.redo()}>
-					↷
-				</button>
-				<button
-					style={btn}
-					title="刪除目前選取的便利貼或連線(快捷鍵 Delete)"
-					onClick={() => {
-						if (selectedId) deleteSticky(selectedId)
-						else if (selectedConnId) deleteConnector(selectedConnId)
-					}}
-				>
-					刪除選取
-				</button>
-				<button
-					title="匯出 / 輸出:會議摘要、Markdown 紀錄、或白板圖片 (PNG)"
-					style={{ ...btn, background: 'var(--accent-soft)' }}
-					onClick={() => setExportOpen(true)}
-				>
-					匯出 / 輸出
-				</button>
-				<button
-					title="把每一張圖的便利貼依它的板型重新排整齊(會議=分欄、組織/流程=樹、心智圖=放射…)。手動移動亂了之後按這個歸位。"
-					style={{ ...btn, background: 'var(--accent-soft)', borderColor: 'var(--accent)', color: 'var(--accent)' }}
-					onClick={tidy}
-				>
-					自動排列
-				</button>
-				<button style={btn} title="設定:AI 用雲端(Groq)或本機、自動排列間距、是否自動重排" onClick={() => setSettingsOpen(true)}>
-					⚙ 設定
-				</button>
-				<button style={btn} title={theme === 'dark' ? '切換亮色主題' : '切換暗色主題'} onClick={toggleTheme}>
-					{theme === 'dark' ? '☀' : '☾'}
-				</button>
-				<button style={btn} title="視圖回到原點與原始縮放" onClick={() => setView({ x: 0, y: 0, scale: 1 })}>
-					回正
-				</button>
-				<button
-					style={btn}
-					title="清空整個房間(會清掉所有人的板,請小心)"
-					onClick={() => {
-						if (window.confirm('清空整個房間給所有人?')) clearAll()
-					}}
-				>
-					清空
-				</button>
-				<button style={btn} title="使用說明 / 新手引導" onClick={() => setGuide(true)}>
-					?
-				</button>
+			</div>
+
+			{/* canvas tools (left strip, Photoshop-style) */}
+			<div className="toolstrip float-in">
+				<button className="tool" title="新增一張空白便利貼(也可雙擊白板空白處)" onClick={() => addSticky(140, 140, '', 'yellow') && undefined}><span className="ico">＋</span>便利貼</button>
+				<button className="tool" title="新增一張備註。任何圖表都能貼;自動排列與 AI 都不會動它。" style={{ background: COLORS.note, borderColor: KIND_ACCENT.note }} onClick={() => addNote(180, 180) && undefined}><span className="ico">＋</span>備註</button>
+				<button className="tool" title="手動新增一張圖(AI 也會在切新主題時自動開)" onClick={() => setTypePickerOpen(true)}><span className="ico">⊞</span>新圖{frames.length ? `·${frames.length}` : ''}</button>
+				<div className="tool-divider" />
+				<button className={`tool${connectMode ? ' on' : ''}`} title="開啟後依序點兩張便利貼,畫一條關係箭頭" onClick={() => { setConnectMode((v) => !v); setConnectFrom(null) }}><span className="ico">↘</span>{connectMode ? '點兩張' : '連線'}</button>
+				<button className="tool" title="把每張圖依它的板型重新排整齊" onClick={tidy}><span className="ico">≣</span>排列</button>
+				<div className="tool-divider" />
+				<button className="tool" title="復原 Ctrl+Z" onClick={() => undoMgr.undo()}><span className="ico">↶</span>復原</button>
+				<button className="tool" title="重做 Ctrl+Shift+Z" onClick={() => undoMgr.redo()}><span className="ico">↷</span>重做</button>
+				<button className="tool" disabled={!selectedId && !selectedConnId} title="刪除選取的便利貼或連線(Delete)" onClick={() => { if (selectedId) deleteSticky(selectedId); else if (selectedConnId) deleteConnector(selectedConnId) }}><span className="ico">🗑</span>刪除</button>
+			</div>
+
+			{/* app / view (top-right) — settings, theme, export, danger */}
+			<div className="glass float-in" style={appbar}>
+				<button title="匯出 / 輸出:會議摘要、Markdown、PNG、畫板存檔(可還原)" style={{ ...btn, background: 'var(--accent-soft)' }} onClick={() => setExportOpen(true)}>匯出</button>
+				<button style={btn} title="設定:AI 雲端/本機、排列間距、自動重排" onClick={() => setSettingsOpen(true)}>⚙</button>
+				<button style={btn} title={theme === 'dark' ? '切換亮色主題' : '切換暗色主題'} onClick={toggleTheme}>{theme === 'dark' ? '☀' : '☾'}</button>
+				<button style={btn} title="視圖回到原點與原始縮放" onClick={() => setView({ x: 0, y: 0, scale: 1 })}>回正</button>
+				<button className="btn-danger" title="清空整個房間(會清掉所有人的板,請小心)" onClick={() => { if (window.confirm('清空整個房間給所有人?')) clearAll() }}>清空</button>
+				<button style={btn} title="使用說明 / 新手引導" onClick={() => setGuide(true)}>?</button>
 			</div>
 
 			{/* contextual color + delete popover for a selected sticky */}
@@ -1939,6 +1879,20 @@ const bar: React.CSSProperties = {
 	alignItems: 'center',
 	padding: '7px 12px',
 	fontSize: 13,
+}
+const appbar: React.CSSProperties = {
+	position: 'fixed',
+	top: 14,
+	right: 14,
+	zIndex: 1000,
+	display: 'flex',
+	flexWrap: 'wrap',
+	justifyContent: 'flex-end',
+	gap: 6,
+	alignItems: 'center',
+	padding: '7px 10px',
+	fontSize: 13,
+	maxWidth: '46vw',
 }
 const hint: React.CSSProperties = {
 	position: 'fixed',
