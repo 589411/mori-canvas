@@ -7,3 +7,4 @@ certs/
 client/dist/
 server-rs/target/
 client/dist/
+src-tauri/target/

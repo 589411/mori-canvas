@@ -1,0 +1,17 @@
+{
+  "productName": "Mori Canvas",
+  "version": "0.1.0",
+  "identifier": "mori.canvas",
+  "build": { "frontendDist": "../client/dist" },
+  "app": {
+    "windows": [
+      { "label": "main", "title": "Mori Canvas", "width": 1280, "height": 840, "url": "http://127.0.0.1:8731/" }
+    ],
+    "security": { "csp": null }
+  },
+  "bundle": {
+    "active": true,
+    "targets": "all",
+    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png"]
+  }
+}
