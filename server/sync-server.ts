@@ -23,7 +23,7 @@ import { existsSync, mkdirSync, readFileSync, writeFileSync, unlinkSync } from '
 import { createHash } from 'node:crypto'
 import { tmpdir, networkInterfaces } from 'node:os'
 import { join as pathJoin } from 'node:path'
-import { planAgent, type BoardPlan, type ExistingCard, type AgentCommand } from './agent.ts'
+import { planAgent, planCardEdit, type BoardPlan, type ExistingCard, type AgentCommand } from './agent.ts'
 import { boardType, BOARD_TYPES, DEFAULT_BOARD_TYPE } from './board-types.ts'
 import { transcribe } from './stt.ts'
 import { chat } from './llm.ts'
@@ -568,6 +568,35 @@ app.post('/api/transcribe', rateLimit, express.raw({ type: () => true, limit: '2
 		await writeFile(tmp, req.body as Buffer)
 		const text = await transcribe(tmp)
 		res.json({ ok: true, text })
+	} catch (e) {
+		res.status(500).json({ ok: false, error: (e as Error).message })
+	} finally {
+		unlink(tmp).catch(() => {})
+	}
+})
+
+// Per-card voice edit: audio -> STT -> LLM understands which fields to change
+// (text / tags / owner / kind) and patches THAT card.
+app.post('/api/card/:room/:cardId', rateLimit, express.raw({ type: () => true, limit: '25mb' }), async (req, res) => {
+	const ext = String(req.query.ext ?? 'webm').replace(/[^a-z0-9]/gi, '') || 'webm'
+	const tmp = pathJoin(tmpdir(), `c-${rid('a')}.${ext}`)
+	try {
+		await writeFile(tmp, req.body as Buffer)
+		const transcript = await transcribe(tmp)
+		const room = getRoom(req.params.room)
+		const shapes = room.doc.getMap('shapes')
+		const cur = shapes.get(req.params.cardId) as any
+		if (!cur) {
+			res.status(404).json({ ok: false, error: 'card not found', transcript })
+			return
+		}
+		if (!transcript) {
+			res.json({ ok: true, transcript: '', edit: {} })
+			return
+		}
+		const { edit, provider } = await planCardEdit(transcript, { text: cur.text, tags: cur.tags, owner: cur.owner, color: cur.color })
+		if (Object.keys(edit).length) room.doc.transact(() => shapes.set(req.params.cardId, { ...cur, ...edit }))
+		res.json({ ok: true, transcript, edit, provider })
 	} catch (e) {
 		res.status(500).json({ ok: false, error: (e as Error).message })
 	} finally {

@@ -259,3 +259,39 @@ export async function planAgent(
 	)
 	return { result: parseResult(text, existing.length), provider }
 }
+
+// Per-card voice edit: the user dictates a change to ONE sticky. The LLM returns
+// only the fields to change — text and/or tags and/or owner and/or kind/colour.
+export type CardEdit = { text?: string; tags?: string[]; owner?: string; color?: string }
+export async function planCardEdit(
+	transcript: string,
+	card: { text: string; tags?: string[]; owner?: string; color?: string }
+): Promise<{ edit: CardEdit; provider: string }> {
+	const sys = `使用者用語音口述要修改一張便利貼。只輸出一個 JSON,只包含「要更新的欄位」(沒提到的欄位一律不要出現):
+{ "text":"<新文字,繁中短語≤14字>", "tags":["<標籤>"], "owner":"<負責人姓名>", "kind":"topic|todo|decision|risk" }
+判斷規則:
+- 口述在描述/重寫這張的內容 → 回 text。
+- 口述提到「標籤/歸類為/打上…標籤」→ 回 tags(整組取代,1~3 個繁中短詞)。
+- 口述提到「負責人/指派給/交給/誰來做」→ 回 owner(姓名)。
+- 口述提到「這是決議/待辦/風險/主題」之類分類 → 回 kind。
+- 一句話可以同時改多個欄位(例如「改成做教學影片,標籤客戶,指派給小明」→ text+tags+owner 都回)。
+- 沒提到的欄位絕對不要放進 JSON。只輸出 JSON,不要說明文字、不要 <think>。`
+	const meta = [`文字「${card.text}」`]
+	if (card.owner) meta.push(`負責人「${card.owner}」`)
+	if (card.tags?.length) meta.push(`標籤 ${card.tags.join('、')}`)
+	const user = `這張便利貼目前:${meta.join(',')}。\n口述修改(三引號內):\n"""\n${transcript}\n"""`
+	const { text, provider } = await chat([{ role: 'system', content: sys }, { role: 'user', content: user }], { json: true })
+	const edit: CardEdit = {}
+	try {
+		const obj = extractJson(text)
+		if (typeof obj.text === 'string' && obj.text.trim()) edit.text = obj.text.slice(0, 40)
+		if (Array.isArray(obj.tags))
+			edit.tags = obj.tags.filter((t: any) => typeof t === 'string' && t.trim()).slice(0, 3).map((t: string) => t.trim().slice(0, 8))
+		if (typeof obj.owner === 'string' && obj.owner.trim()) edit.owner = obj.owner.trim().slice(0, 10)
+		if (typeof obj.kind === 'string' && COLOR_BY_KIND[obj.kind]) edit.color = COLOR_BY_KIND[obj.kind]
+	} catch {
+		// unparseable → fall back to using the raw transcript as the new text
+		if (transcript.trim()) edit.text = transcript.trim().slice(0, 40)
+	}
+	return { edit, provider }
+}

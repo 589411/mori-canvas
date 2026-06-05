@@ -157,7 +157,8 @@ export default function App() {
 	const [frames, setFrames] = useState<any[]>([]) // diagrams on the canvas
 	const [typePickerOpen, setTypePickerOpen] = useState(false)
 	const [newFrameTitle, setNewFrameTitle] = useState('')
-	const [pngMenu, setPngMenu] = useState(false)
+	const [exportOpen, setExportOpen] = useState(false)
+	const [pngTransparent, setPngTransparent] = useState(false)
 	const [subtitle, setSubtitle] = useState('') // transient STT caption (UX feedback)
 	const subtitleTimer = useRef<any>(null)
 
@@ -531,17 +532,23 @@ export default function App() {
 			setCardRecId(null)
 			const type = mr.mimeType || 'audio/webm'
 			const ext = type.includes('mp4') ? 'mp4' : type.includes('ogg') ? 'ogg' : 'webm'
-			setBusy('轉錄中…')
+			setBusy('聽你說…')
 			try {
-				const r = await fetch(`${SYNC_HTTP}/api/transcribe?ext=${ext}`, {
+				// AI understands the speech and updates this card's text / tags / owner / kind
+				const r = await fetch(`${SYNC_HTTP}/api/card/${encodeURIComponent(room)}/${encodeURIComponent(id)}?ext=${ext}`, {
 					method: 'POST',
 					headers: { 'Content-Type': type },
 					body: new Blob(chunks, { type }),
 				}).then((x) => x.json())
-				if (r.ok && r.text) {
-					patchShape(id, { text: r.text })
-					setBusy('')
-				} else setBusy(r.error ? `錯誤:${r.error}` : '沒聽到內容')
+				if (r.ok) {
+					showSubtitle(r.transcript)
+					const parts: string[] = []
+					if (r.edit?.text !== undefined) parts.push('文字')
+					if (r.edit?.tags) parts.push('標籤')
+					if (r.edit?.owner !== undefined) parts.push('負責人')
+					if (r.edit?.color) parts.push('分類')
+					setBusy(parts.length ? `已更新這張的 ${parts.join('、')}` : r.transcript ? '沒聽出要改什麼' : '沒聽到內容')
+				} else setBusy(r.error ? `錯誤:${r.error}` : '錯誤')
 			} catch (e) {
 				setBusy(`錯誤:${(e as Error).message}`)
 			}
@@ -776,7 +783,7 @@ export default function App() {
 							['顏色 = 類型', '__LEGEND__'],
 								['自己調整', '雙擊空白新增便利貼、雙擊卡片改字、拖拉移動;點一張卡可改色或刪除;「連線」把兩張卡的關係連起來。'],
 								['拉人一起', '右上「分享 / QR」—— 同事掃 QR 或輸入房號就進來,大家即時一起編輯。'],
-								['收尾', '按「會議摘要」,AI 一鍵產出一頁會議紀錄(決議 / 待辦 / 風險)。'],
+								['收尾', '按「匯出 / 輸出」→ 會議摘要,AI 一鍵產出一頁紀錄(決議 / 待辦 / 風險)。'],
 							] as [string, string][]
 						).map(([t, d], i) => (
 							<div key={i} style={{ display: 'flex', gap: 12, marginBottom: 14 }}>
@@ -1218,17 +1225,11 @@ export default function App() {
 					刪除選取
 				</button>
 				<button
-					title="用 AI 把整張板整理成一頁會議紀錄(重點/決議/待辦/風險)"
+					title="匯出 / 輸出:會議摘要、Markdown 紀錄、或白板圖片 (PNG)"
 					style={{ ...btn, background: '#fef3c7' }}
-					onClick={() => window.open(`${SYNC_HTTP}/api/summary/${encodeURIComponent(room)}`, '_blank')}
+					onClick={() => setExportOpen(true)}
 				>
-					會議摘要
-				</button>
-				<button style={btn} title="下載 markdown 會議紀錄" onClick={exportMd}>
-					匯出 MD
-				</button>
-				<button style={btn} title="下載白板圖片 (PNG) —— 可選透明底或白底" onClick={() => setPngMenu((v) => !v)}>
-					匯出 PNG
+					匯出 / 輸出
 				</button>
 				<button
 					title="把每一張圖的便利貼依它的板型重新排整齊(會議=分欄、組織/流程=樹、心智圖=放射…)。手動移動亂了之後按這個歸位。"
@@ -1358,15 +1359,59 @@ export default function App() {
 				</div>
 			)}
 
-			{/* PNG export: transparent or paper background */}
-			{pngMenu && (
+			{/* export / output dialog (centered, clearly visible) */}
+			{exportOpen && (
 				<div
-					className="glass float-in"
-					style={{ position: 'fixed', bottom: mobile ? 96 : 72, left: '50%', transform: 'translateX(-50%)', zIndex: 1600, display: 'flex', gap: 8, alignItems: 'center', padding: '7px 12px', fontSize: 13 }}
+					onClick={() => setExportOpen(false)}
+					style={{ position: 'fixed', inset: 0, zIndex: 3600, background: 'rgba(28,26,23,0.4)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
 				>
-					<span style={{ color: 'var(--ink-soft)', fontSize: 12 }}>PNG 背景</span>
-					<button onClick={() => { exportPng(false); setPngMenu(false) }}>紙底(白)</button>
-					<button onClick={() => { exportPng(true); setPngMenu(false) }}>透明底</button>
+					<div className="glass modal-in" onClick={(e) => e.stopPropagation()} style={{ background: 'rgba(253,251,247,0.98)', width: 'min(420px, 92vw)', padding: 22, borderRadius: 18 }}>
+						<div style={{ fontWeight: 700, fontSize: 16 }}>匯出 / 輸出</div>
+						<div style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '4px 0 16px' }}>選要輸出什麼。</div>
+						<button
+							style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 8, padding: '11px 12px' }}
+							onClick={() => {
+								window.open(`${SYNC_HTTP}/api/summary/${encodeURIComponent(room)}`, '_blank')
+								setExportOpen(false)
+							}}
+						>
+							<div style={{ fontWeight: 600, fontSize: 14 }}>會議摘要</div>
+							<div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>AI 把整張板整理成一頁紀錄(另開頁面)</div>
+						</button>
+						<button
+							style={{ display: 'block', width: '100%', textAlign: 'left', marginBottom: 8, padding: '11px 12px' }}
+							onClick={() => {
+								exportMd()
+								setExportOpen(false)
+							}}
+						>
+							<div style={{ fontWeight: 600, fontSize: 14 }}>會議紀錄 (Markdown)</div>
+							<div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>下載 .md —— 每張圖一個區段</div>
+						</button>
+						<div style={{ border: '1px solid var(--line)', borderRadius: 12, padding: '11px 12px', marginBottom: 12 }}>
+							<div style={{ fontWeight: 600, fontSize: 14 }}>白板圖片 (PNG)</div>
+							<div style={{ display: 'flex', gap: 16, margin: '8px 0', fontSize: 13 }}>
+								<label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
+									<input type="radio" checked={!pngTransparent} onChange={() => setPngTransparent(false)} /> 紙底(白)
+								</label>
+								<label style={{ display: 'inline-flex', alignItems: 'center', gap: 5, cursor: 'pointer' }}>
+									<input type="radio" checked={pngTransparent} onChange={() => setPngTransparent(true)} /> 透明底
+								</label>
+							</div>
+							<button
+								style={{ width: '100%', background: 'var(--ink)', color: '#fff', borderColor: 'var(--ink)' }}
+								onClick={() => {
+									exportPng(pngTransparent)
+									setExportOpen(false)
+								}}
+							>
+								下載 PNG
+							</button>
+						</div>
+						<button style={{ width: '100%' }} onClick={() => setExportOpen(false)}>
+							關閉
+						</button>
+					</div>
 				</div>
 			)}
 
