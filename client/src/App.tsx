@@ -971,7 +971,7 @@ export default function App() {
 							</div>
 						))}
 						<button
-							style={{ width: '100%', marginTop: 6, padding: '11px', fontSize: 15, fontWeight: 600, background: 'var(--accent)', color: '#fff', borderColor: 'var(--accent)' }}
+							className="btn-accent" style={{ width: '100%', marginTop: 6, padding: '11px', fontSize: 15, fontWeight: 600 }}
 							onClick={() => {
 								localStorage.setItem('wb-seen-guide', '1')
 								setGuide(false)
@@ -1392,7 +1392,7 @@ export default function App() {
 
 			{/* app / view (top-right) — settings, theme, export, danger */}
 			<div className="glass float-in" style={appbar}>
-				<button title="匯出 / 輸出:會議摘要、Markdown、PNG、畫板存檔(可還原)" style={{ ...btn, background: 'var(--accent-soft)' }} onClick={() => setExportOpen(true)}>匯出</button>
+				<button title="匯出 / 輸出:會議摘要、Markdown、PNG、畫板存檔(可還原)" className="btn-soft" onClick={() => setExportOpen(true)}>匯出</button>
 				<button style={btn} title="設定:AI 雲端/本機、排列間距、自動重排" onClick={() => setSettingsOpen(true)}>⚙</button>
 				<button style={btn} title={theme === 'dark' ? '切換亮色主題' : '切換暗色主題'} onClick={toggleTheme}>{theme === 'dark' ? '☀' : '☾'}</button>
 				<button style={btn} title="視圖回到原點與原始縮放" onClick={() => setView({ x: 0, y: 0, scale: 1 })}>回正</button>
@@ -1602,7 +1602,7 @@ export default function App() {
 							<div style={{ fontWeight: 600, fontSize: 14 }}>畫板存檔(可還原)</div>
 							<div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 8 }}>存成 .json,完整保留卡片/連線/圖框,匯入即還原。也可把檔案傳給別人匯入接著討論、再回傳。</div>
 							<div style={{ display: 'flex', gap: 8 }}>
-								<button style={{ flex: 1, background: 'var(--ink)', color: 'var(--bg)', borderColor: 'var(--ink)' }}
+								<button className="btn-primary" style={{ flex: 1 }}
 									onClick={() => { exportBoard(); setExportOpen(false) }}>下載畫板檔</button>
 								<button style={{ flex: 1 }} onClick={() => pickAndImportBoard()}>匯入還原…</button>
 							</div>
@@ -1638,7 +1638,7 @@ export default function App() {
 								</label>
 							</div>
 							<button
-								style={{ width: '100%', background: 'var(--ink)', color: 'var(--bg)', borderColor: 'var(--ink)' }}
+								className="btn-primary" style={{ width: '100%' }}
 								onClick={() => {
 									exportPng(pngTransparent)
 									setExportOpen(false)
@@ -1786,7 +1786,7 @@ export default function App() {
 								style={{ flex: 1, font: '12px system-ui', padding: '6px 8px', border: '1px solid var(--line)', borderRadius: 6 }}
 							/>
 							<button
-								style={{ ...btn, background: 'var(--accent-soft)' }}
+								className="btn-soft"
 								onClick={() => navigator.clipboard?.writeText(shareUrl)}
 							>
 								複製連結
