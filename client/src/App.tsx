@@ -236,6 +236,8 @@ export default function App() {
 	const [pngTransparent, setPngTransparent] = useState(false)
 	const [settingsOpen, setSettingsOpen] = useState(false)
 	const [menuOpen, setMenuOpen] = useState(false) // mobile top-bar overflow menu
+	const [installPrompt, setInstallPrompt] = useState<any>(null) // deferred PWA install prompt
+	const [iosInstallHint, setIosInstallHint] = useState(false)
 	const [settings, setSettings] = useState({ localOnly: false, groqKey: true, spacing: 1, autoTidy: true, mode: 'mori', sttSource: 'local', whisperUrl: '' })
 	// bring your own AI: any OpenAI-compatible base + key + model -> visitor's own quota
 	const [byo, setByo] = useState(() => ({ base: localStorage.getItem('wb-llm-base') || '', key: localStorage.getItem('wb-llm-key') || '', model: localStorage.getItem('wb-llm-model') || '' }))
@@ -299,6 +301,16 @@ export default function App() {
 			fetch(`${SYNC_HTTP}/api/health`, { cache: 'no-store' }).catch(() => {})
 		}, 5 * 60 * 1000)
 		return () => clearInterval(id)
+	}, [])
+	// capture the PWA install prompt (Chrome/Edge/Android) so we can offer an "安裝 App" button
+	useEffect(() => {
+		const onBIP = (e: any) => {
+			e.preventDefault()
+			setInstallPrompt(e)
+		}
+		window.addEventListener('beforeinstallprompt', onBIP)
+		window.addEventListener('appinstalled', () => setInstallPrompt(null))
+		return () => window.removeEventListener('beforeinstallprompt', onBIP)
 	}, [])
 	useEffect(() => {
 		localStorage.setItem('wb-name', myName)
@@ -1043,6 +1055,21 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 	}
 
 	const mobile = size.w < 700
+	// PWA install affordance — only when it makes sense (not already installed, not the Tauri app)
+	const isStandalone = window.matchMedia('(display-mode: standalone)').matches || (navigator as any).standalone === true
+	const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent)
+	const isTauriApp = '__TAURI_INTERNALS__' in window || '__TAURI__' in window
+	const canInstall = !isTauriApp && !isStandalone && (!!installPrompt || (isIOS && /safari/i.test(navigator.userAgent) && !/crios|fxios/i.test(navigator.userAgent)))
+	const doInstall = async () => {
+		setMenuOpen(false)
+		if (installPrompt) {
+			installPrompt.prompt()
+			try {
+				await installPrompt.userChoice
+			} catch {}
+			setInstallPrompt(null)
+		} else if (isIOS) setIosInstallHint(true)
+	}
 	// bare <button> is styled globally (index.html); keep this empty so variant
 	// overrides (background, width…) layer on top cleanly.
 	const btn: React.CSSProperties = {}
@@ -1566,6 +1593,9 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 					</div>
 					{menuOpen && (
 						<div className="glass float-in" style={{ position: 'fixed', top: 'calc(54px + env(safe-area-inset-top, 0px))', right: 'calc(8px + env(safe-area-inset-right, 0px))', zIndex: 2100, display: 'flex', flexDirection: 'column', gap: 5, padding: 8, minWidth: 156 }} onClick={() => setMenuOpen(false)}>
+							{canInstall && (
+								<button className="btn-accent" onClick={(e) => { e.stopPropagation(); doInstall() }}>安裝 App / 加到主畫面</button>
+							)}
 							<button className="btn-soft" onClick={() => setExportOpen(true)}>匯出 / 會議紀錄</button>
 							<button onClick={() => setSettingsOpen(true)}>⚙ 設定</button>
 							<button onClick={() => toggleTheme()}>{theme === 'dark' ? '☀ 亮色主題' : '☾ 暗色主題'}</button>
@@ -1617,8 +1647,9 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 				byId(selectedId) &&
 				(() => {
 					const s = byId(selectedId)!
-					const left = Math.max(8, Math.min(view.x + s.x * view.scale, size.w - 230))
-					const top = Math.max(8, view.y + s.y * view.scale - 48)
+					// keep the popover fully on-screen (esp. mobile): clamp by its own size
+					const left = Math.max(8, Math.min(view.x + s.x * view.scale, size.w - 244))
+					const top = Math.max(8, Math.min(view.y + s.y * view.scale - 48, size.h - 264))
 					return (
 						<div className="glass float-in" style={{ position: 'fixed', left, top, zIndex: 1500, display: 'flex', flexDirection: 'column', gap: 6, alignItems: 'stretch', padding: '7px 9px', minWidth: 236 }}>
 								<div style={{ display: 'flex', gap: 7, alignItems: 'center' }}>
@@ -1919,6 +1950,17 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 			)}
 
 							{/* demo / sponsor banner (only when the host sets SPONSOR_URL / DEMO_NOTICE env) */}
+				{iosInstallHint && (
+					<div className="scrim" style={{ zIndex: 4000 }} onClick={() => setIosInstallHint(false)}>
+						<div className="dialog-card modal-in" onClick={(e) => e.stopPropagation()} style={{ width: 'min(360px, 92vw)', textAlign: 'center' }}>
+							<div style={{ fontWeight: 700, fontSize: 17, marginBottom: 10 }}>加到主畫面</div>
+							<div className="muted" style={{ fontSize: 13.5, lineHeight: 1.7, marginBottom: 16 }}>
+								在 Safari 點下方的「分享」<br />→ 往下找「加入主畫面」<br />→ 加入,就有全螢幕 App 圖示。
+							</div>
+							<button className="btn-accent" style={{ width: '100%' }} onClick={() => setIosInstallHint(false)}>知道了</button>
+						</div>
+					</div>
+				)}
 				{(sponsor.notice || sponsor.url) && !sponsorHidden && (
 					<div className="glass float-in" style={{ position: 'fixed', bottom: 'calc(14px + env(safe-area-inset-bottom, 0px))', right: 'calc(14px + env(safe-area-inset-right, 0px))', zIndex: 1300, display: 'flex', alignItems: 'center', gap: 10, padding: '8px 12px', maxWidth: 'min(92vw, 430px)', fontSize: 12.5 }}>
 						{sponsor.notice && <span className="muted" style={{ lineHeight: 1.35 }}>{sponsor.notice}</span>}
