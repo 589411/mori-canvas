@@ -24,6 +24,7 @@ import { createHash } from 'node:crypto'
 import { tmpdir, networkInterfaces } from 'node:os'
 import { join as pathJoin } from 'node:path'
 import { planAgent, type BoardPlan, type ExistingCard, type AgentCommand } from './agent.ts'
+import { boardType, BOARD_TYPES, DEFAULT_BOARD_TYPE } from './board-types.ts'
 import { transcribe } from './stt.ts'
 import { chat } from './llm.ts'
 
@@ -480,14 +481,17 @@ app.post('/api/bot/:room/sticky', (req, res) => {
 async function runAgentTurn(roomName: string, transcript: string, by: string): Promise<any> {
 	return withRoomLock(roomName, async () => {
 		const room = getRoom(roomName)
+		const meta = boardMeta(room)
 		const existing = existingStickies(room)
-		const { result, provider } = await planAgent(transcript, existing)
+		const { result, provider } = await planAgent(transcript, existing, meta.type, meta.topic)
 		if (result.intent === 'command') {
 			const done = runCommand(room, existing, result.command)
 			console.log(`[agent] command in "${roomName}": ${done.label}`)
 			return { provider, intent: 'command', command: done.view ?? null, commandLabel: done.label, added: [], stickies: 0, connectors: 0 }
 		}
 		const r = await applyPlan(roomName, result.plan, by, existing.map((e) => e.id))
+		// tree-type boards (org/flow/architecture): re-flow into the hierarchy once new cards + their connectors land
+		if (boardType(meta.type).layout === 'tree' && (r.ids.length || r.connectorsDrawn)) tidyBoard(room)
 		return { provider, intent: 'content', added: result.plan.stickies, ids: r.ids, stickies: r.ids.length, connectors: r.connectorsDrawn }
 	})
 }
@@ -645,7 +649,15 @@ app.post('/api/rooms/:room/end', (req, res) => {
 })
 
 // Auto-arrange: re-lay every sticky into its kind-column, top-to-bottom (one-tap tidy).
-function tidyBoard(room: Room) {
+function boardMeta(room: Room): { type: string; topic: string } {
+	const m = room.doc.getMap('meta')
+	const type = typeof m.get('type') === 'string' ? (m.get('type') as string) : DEFAULT_BOARD_TYPE
+	const topic = typeof m.get('topic') === 'string' ? (m.get('topic') as string) : ''
+	return { type, topic }
+}
+
+// meeting layout: group by kind into columns
+function columnsLayout(room: Room) {
 	const shapes = room.doc.getMap('shapes')
 	room.doc.transact(() => {
 		const rowByCol: Record<number, number> = {}
@@ -661,9 +673,97 @@ function tidyBoard(room: Room) {
 		}
 	})
 }
+
+// org-chart / flow / architecture: hierarchical layout following the connectors
+function treeLayout(room: Room, dir: 'TB' | 'LR') {
+	const shapes = room.doc.getMap('shapes')
+	const conns = room.doc.getMap('connectors')
+	const nodes = [...shapes.values()].filter((s: any) => s.type === 'sticky') as any[]
+	if (!nodes.length) return
+	const ids = nodes.map((n) => n.id)
+	const idset = new Set(ids)
+	const children = new Map<string, string[]>()
+	const indeg = new Map<string, number>()
+	ids.forEach((id) => {
+		children.set(id, [])
+		indeg.set(id, 0)
+	})
+	for (const c of [...conns.values()] as any[]) {
+		if (idset.has(c.from) && idset.has(c.to) && c.from !== c.to) {
+			children.get(c.from)!.push(c.to)
+			indeg.set(c.to, (indeg.get(c.to) || 0) + 1)
+		}
+	}
+	let roots = ids.filter((id) => (indeg.get(id) || 0) === 0)
+	if (!roots.length) roots = [ids[0]]
+	// longest-path level (a node sits one row below its deepest parent)
+	const level = new Map<string, number>()
+	const queue: [string, number][] = roots.map((r) => [r, 0])
+	let guard = 0
+	while (queue.length && guard++ < 20000) {
+		const [id, lv] = queue.shift()!
+		if ((level.get(id) ?? -1) >= lv) continue
+		level.set(id, lv)
+		for (const ch of children.get(id) || []) queue.push([ch, lv + 1])
+	}
+	ids.forEach((id) => {
+		if (!level.has(id)) level.set(id, 0)
+	})
+	// group by level; order within a level by current position (stable)
+	const order = [...ids].sort((a, b) => {
+		const sa = shapes.get(a) as any
+		const sb = shapes.get(b) as any
+		return level.get(a)! - level.get(b)! || (dir === 'LR' ? sa.y - sb.y : sa.x - sb.x)
+	})
+	const byLevel = new Map<number, string[]>()
+	for (const id of order) {
+		const lv = level.get(id)!
+		if (!byLevel.has(lv)) byLevel.set(lv, [])
+		byLevel.get(lv)!.push(id)
+	}
+	const GX = 250
+	const GY = 240
+	const X0 = 140
+	const Y0 = 130
+	room.doc.transact(() => {
+		for (const [lv, list] of byLevel) {
+			list.forEach((id, i) => {
+				const cur = shapes.get(id) as any
+				const x = dir === 'LR' ? X0 + lv * GX : X0 + i * GX
+				const y = dir === 'LR' ? Y0 + i * GY : Y0 + lv * GY
+				shapes.set(id, { ...cur, x, y })
+			})
+		}
+	})
+}
+
+function tidyBoard(room: Room) {
+	const bt = boardType(boardMeta(room).type)
+	if (bt.layout === 'tree') treeLayout(room, bt.dir)
+	else columnsLayout(room)
+}
 app.post('/api/rooms/:room/tidy', (req, res) => {
 	tidyBoard(getRoom(req.params.room))
 	res.json({ ok: true })
+})
+
+// board type/topic metadata — drives how the agent interprets and how it auto-arranges
+app.get('/api/rooms/:room/meta', (req, res) => {
+	res.json({
+		ok: true,
+		...boardMeta(getRoom(req.params.room)),
+		types: Object.values(BOARD_TYPES).map((t) => ({ key: t.key, label: t.label, blurb: t.blurb })),
+	})
+})
+app.post('/api/rooms/:room/meta', (req, res) => {
+	const room = getRoom(req.params.room)
+	const m = room.doc.getMap('meta')
+	const type = String(req.body?.type ?? '')
+	room.doc.transact(() => {
+		if (BOARD_TYPES[type]) m.set('type', type)
+		if (req.body?.topic !== undefined) m.set('topic', String(req.body.topic).slice(0, 80))
+	})
+	res.json({ ok: true, ...boardMeta(room) })
 })
 
 app.get('/api/health', (_req, res) => {

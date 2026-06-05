@@ -4,6 +4,7 @@
  * (strips <think> blocks / code fences, then takes the outer {...}).
  */
 import { chat } from './llm.ts'
+import { boardType as resolveBoardType } from './board-types.ts'
 
 export type StickyPlan = { text: string; color: string; kind?: string; owner?: string; tags?: string[] }
 export type StickyUpdate = { index: number; text?: string; color?: string }
@@ -55,12 +56,12 @@ const SYSTEM = `你是會議白板助手。每次收到「使用者這段話」+
 index 一律用下方「目前白板」清單的索引(找最符合使用者描述的那張)。
 注意:「改成<某類型>」(主題/待辦/決議/風險)用 recolor;「改成/改寫成<某段新文字>」用 edit。
 
-【若是 content】輸出 { "intent":"content", "stickies":[ { "text":"<繁中短語,最多14字>", "kind":"topic|todo|decision|risk", "owner":"<可省略>", "tags":["<內容標籤>"] } ], "connectors":[ { "from":<索引>, "to":<索引> } ], "updates":[...], "deletes":[...] }
+【若是 content】輸出 { "intent":"content", "stickies":[ { "text":"<繁中短語,最多14字>", "color":"yellow|green|blue|red", "owner":"<可省略>", "tags":["<標籤>"] } ], "connectors":[ { "from":<索引>, "to":<索引> } ], "updates":[...], "deletes":[...] }
 content 規則:
-- 最多 6 張。text 是精簡繁中名詞片語,別超過 14 字。kind:主題=topic 待辦=todo 決議=decision 風險=risk。
-- connectors 用 from/to(從 0 起)連相關的兩張(主題→待辦/風險/決議、問題→解法),連 2~4 條;from/to 是分開兩個整數,別黏一起。
-- owner:逐字稿明確指出某人負責/被影響才填(繁中≤8字),否則省略別猜。
-- tags:1~2 個內容主題短詞(如 前端/資料庫/客戶/金流),否則省略;標籤是內容主題不是類型。
+- **卡片的分類、配色(color)、連線的方向與意義、owner/tags 的用途,一律依使用者訊息中的【板型說明】解讀。** 板型說明會告訴你每個顏色代表什麼、連線 from→to 代表什麼。
+- 每次最多 6 張。text 是精簡繁中短語,別超過 14 字。配色直接給 color(yellow/green/blue/red);會議板也可用 kind(topic=黃/todo=綠/decision=藍/risk=紅)。
+- connectors 用 from/to(從 0 起,分開兩個整數別黏一起),方向與條數依板型說明;把相關的卡接起來(組織圖/流程圖/架構圖務必接成完整的樹/鏈,別漏接)。
+- owner / tags 沒有就省略,別亂猜。
 - 只根據逐字稿,不得編造沒有的內容(連線屬整理關係可放心畫)。
 
 【累積模式】附了「目前白板」清單(帶索引、類型、負責人、標籤)時,代表同一場會議後續:
@@ -202,8 +203,12 @@ const KIND_ZH: Record<string, string> = { yellow: '主題', green: '待辦', blu
  */
 export async function planAgent(
 	transcript: string,
-	existing: ExistingCard[] = []
+	existing: ExistingCard[] = [],
+	typeKey?: string,
+	topic?: string
 ): Promise<{ result: AgentResult; provider: string }> {
+	const bt = resolveBoardType(typeKey)
+	const typeBlock = `\n\n【板型說明】(${bt.label})${bt.hint}${topic ? `\n這張板的主題:「${topic}」,整理時聚焦在這個主題。` : ''}`
 	const existingBlock = existing.length
 		? `\n\n目前白板(索引 0..${existing.length - 1}):\n` +
 			existing
@@ -221,7 +226,7 @@ export async function planAgent(
 			{ role: 'system', content: SYSTEM },
 			{
 				role: 'user',
-				content: `使用者這段話(三引號內,可能是會議內容、也可能是給你的指令):\n"""\n${transcript}\n"""${existingBlock}`,
+				content: `使用者這段話(三引號內,可能是會議內容、也可能是給你的指令):\n"""\n${transcript}\n"""${typeBlock}${existingBlock}`,
 			},
 		],
 		{ json: true }

@@ -34,6 +34,14 @@ const KIND_ACCENT: Record<string, string> = {
 const CANVAS_FONT = "'Noto Sans TC', 'PingFang TC', 'Microsoft JhengHei', system-ui, sans-serif"
 const KIND_LABEL: Record<string, string> = { yellow: '主題', green: '待辦', blue: '決議', red: '風險' }
 const KIND_ORDER = ['yellow', 'green', 'blue', 'red'] as const
+// board types (mirror of server/board-types.ts, for the picker + badge)
+const WB_TYPES: { key: string; label: string; blurb: string }[] = [
+	{ key: 'meeting', label: '會議白板', blurb: '討論 → 主題 / 待辦 / 決議 / 風險,分欄整理' },
+	{ key: 'orgchart', label: '組織架構圖', blurb: '部門 / 職位 / 隸屬關係,階層樹排列' },
+	{ key: 'flow', label: '流程圖', blurb: '步驟串成先後流程(左→右)' },
+	{ key: 'architecture', label: '系統架構圖', blurb: '元件 / 服務與呼叫依賴' },
+]
+const typeLabel = (k: string) => WB_TYPES.find((t) => t.key === k)?.label || '白板'
 // Same-origin: the API and the sync websocket both go through Vite's reverse
 // proxy, so this works over http OR https (and behind a tunnel) with no hardcoded
 // port. ws upgrades to wss automatically when the page is served over https.
@@ -98,16 +106,17 @@ export default function App() {
 	const shareHost = isLocalHostPage && lanIp ? lanIp : location.hostname
 	const shareUrl = `${location.protocol}//${shareHost}${location.port ? ':' + location.port : ''}${location.pathname}?room=${encodeURIComponent(room)}`
 
-	const { doc, yShapes, yConnectors, provider, undoMgr, LOCAL } = useMemo(() => {
+	const { doc, yShapes, yConnectors, yMeta, provider, undoMgr, LOCAL } = useMemo(() => {
 		const doc = new Y.Doc()
 		const provider = new WebsocketProvider(SYNC_WS, room, doc)
 		const yShapes = doc.getMap<Sticky>('shapes')
 		const yConnectors = doc.getMap<Connector>('connectors')
+		const yMeta = doc.getMap<string>('meta') // board type + topic
 		const LOCAL = { local: true } // origin tag so undo only tracks MY edits, not remote/Mori
 		const undoMgr = new Y.UndoManager([yShapes, yConnectors], { trackedOrigins: new Set([LOCAL]) })
 		;(window as any).__getShapes = () => Array.from(yShapes.values())
 		;(window as any).__getConnectors = () => Array.from(yConnectors.values())
-		return { doc, yShapes, yConnectors, provider, undoMgr, LOCAL }
+		return { doc, yShapes, yConnectors, yMeta, provider, undoMgr, LOCAL }
 	}, [room])
 
 	const [shapes, setShapes] = useState<Sticky[]>([])
@@ -134,6 +143,11 @@ export default function App() {
 	const [roomList, setRoomList] = useState<{ id: string; shapes: number; online: number }[]>([])
 	const [panelOpen, setPanelOpen] = useState(window.innerWidth >= 700) // collapse agent panel on small screens
 	const [guide, setGuide] = useState(() => !localStorage.getItem('wb-seen-guide')) // first-run onboarding
+	const [boardTypeKey, setBoardTypeKey] = useState('meeting') // synced board type
+	const [boardTopic, setBoardTopic] = useState('')
+	const [typePickerOpen, setTypePickerOpen] = useState(false)
+	const [subtitle, setSubtitle] = useState('') // transient STT caption (UX feedback)
+	const subtitleTimer = useRef<any>(null)
 
 	// presence: my identity (persistent name + colour) + everyone else's cursors
 	const [myName, setMyName] = useState(() => localStorage.getItem('wb-name') || '訪客-' + genCode(3))
@@ -186,6 +200,22 @@ export default function App() {
 	function tidy() {
 		fetch(`${SYNC_HTTP}/api/rooms/${encodeURIComponent(room)}/tidy`, { method: 'POST' }).catch(() => {})
 	}
+	// set this board's type/topic (server-side, authoritative) then re-arrange
+	async function setBoardType(key: string, topic?: string) {
+		await fetch(`${SYNC_HTTP}/api/rooms/${encodeURIComponent(room)}/meta`, {
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json' },
+			body: JSON.stringify({ type: key, ...(topic !== undefined ? { topic } : {}) }),
+		}).catch(() => {})
+		tidy()
+	}
+	// transient STT caption — UX hint so the speaker sees what was heard, fades in 3s
+	function showSubtitle(text: string) {
+		if (!text) return
+		setSubtitle(text)
+		if (subtitleTimer.current) clearTimeout(subtitleTimer.current)
+		subtitleTimer.current = setTimeout(() => setSubtitle(''), 3000)
+	}
 	function exportPng() {
 		const uri = stageRef.current?.toDataURL({ pixelRatio: 2 })
 		if (!uri) return
@@ -198,10 +228,16 @@ export default function App() {
 	useEffect(() => {
 		const sync = () => setShapes(Array.from(yShapes.values()))
 		const syncC = () => setConnectors(Array.from(yConnectors.values()))
+		const syncMeta = () => {
+			setBoardTypeKey((yMeta.get('type') as string) || 'meeting')
+			setBoardTopic((yMeta.get('topic') as string) || '')
+		}
 		sync()
 		syncC()
+		syncMeta()
 		yShapes.observe(sync)
 		yConnectors.observe(syncC)
+		yMeta.observe(syncMeta)
 		// presence: track everyone else's cursors (Mori + other humans)
 		const aw = (provider as any).awareness
 		const updateCursors = () => {
@@ -223,12 +259,13 @@ export default function App() {
 		return () => {
 			yShapes.unobserve(sync)
 			yConnectors.unobserve(syncC)
+			yMeta.unobserve(syncMeta)
 			aw.off('change', updateCursors)
 			provider.off('status', onStatus)
 			window.removeEventListener('resize', onResize)
 			provider.destroy()
 		}
-	}, [yShapes, yConnectors, provider])
+	}, [yShapes, yConnectors, yMeta, provider])
 
 	// keyboard: undo/redo + delete (but not while editing text)
 	useEffect(() => {
@@ -465,7 +502,10 @@ export default function App() {
 			body: blob,
 		})
 			.then((x) => x.json())
-			.then((r) => applyAgentResponse(r)) // a segment may be a spoken command, not content
+			.then((r) => {
+				showSubtitle(r.transcript) // UX: let the speaker see what was heard
+				applyAgentResponse(r) // a segment may be a spoken command, not content
+			})
 			.catch(() => {})
 	}
 
@@ -604,6 +644,7 @@ export default function App() {
 					`${SYNC_HTTP}/api/voice/${encodeURIComponent(room)}?ext=${ext}&by=${encodeURIComponent(me.name)}`,
 					{ method: 'POST', headers: { 'Content-Type': type }, body: blob }
 				).then((x) => x.json())
+				showSubtitle(r.transcript)
 				applyAgentResponse(r, r.transcript ? `聽到「${r.transcript}」→ ` : '')
 			} catch (e) {
 				setBusy(`錯誤:${(e as Error).message}`)
@@ -960,6 +1001,14 @@ export default function App() {
 				>
 					分享 / QR
 				</button>
+				<button
+					title="這張板的類型 —— AI 會依此解讀卡片與連線。點我切換(會議 / 組織圖 / 流程圖 / 架構圖)"
+					style={{ background: 'var(--accent-soft)', borderColor: 'var(--accent)', color: 'var(--accent)' }}
+					onClick={() => setTypePickerOpen(true)}
+				>
+					{typeLabel(boardTypeKey)}
+					{boardTopic ? `:${boardTopic}` : ''}
+				</button>
 				<span style={{ color: 'var(--ink-soft)', fontSize: 12 }} title={status === 'synced' ? '已即時連線' : status}>
 					{status === 'synced' ? '已連線' : status} · {shapes.length} 張
 				</span>
@@ -1095,6 +1144,76 @@ export default function App() {
 					<button style={{ padding: '3px 9px' }} onClick={() => setFilter(null)}>
 						顯示全部 ✕
 					</button>
+				</div>
+			)}
+
+			{/* board-type picker */}
+			{typePickerOpen && (
+				<div
+					onClick={() => setTypePickerOpen(false)}
+					style={{ position: 'fixed', inset: 0, zIndex: 3500, background: 'rgba(28,26,23,0.4)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+				>
+					<div className="glass modal-in" onClick={(e) => e.stopPropagation()} style={{ background: 'rgba(253,251,247,0.98)', width: 'min(420px, 92vw)', padding: 22, borderRadius: 18 }}>
+						<div style={{ fontWeight: 700, fontSize: 16 }}>這張板要畫什麼?</div>
+						<div style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '4px 0 14px' }}>選類型 —— AI 會用對應的方式解讀內容、配色、連線與排版。</div>
+						{WB_TYPES.map((t) => (
+							<button
+								key={t.key}
+								onClick={() => {
+									setBoardType(t.key)
+									setTypePickerOpen(false)
+								}}
+								style={{
+									display: 'block',
+									width: '100%',
+									textAlign: 'left',
+									marginBottom: 8,
+									padding: '10px 12px',
+									background: boardTypeKey === t.key ? 'var(--accent-soft)' : 'rgba(255,255,255,0.6)',
+									borderColor: boardTypeKey === t.key ? 'var(--accent)' : 'var(--line)',
+								}}
+							>
+								<div style={{ fontWeight: 600, fontSize: 14, color: boardTypeKey === t.key ? 'var(--accent)' : 'var(--ink)' }}>
+									{t.label}
+									{boardTypeKey === t.key ? ' · 目前' : ''}
+								</div>
+								<div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{t.blurb}</div>
+							</button>
+						))}
+						<div style={{ display: 'flex', gap: 6, marginTop: 6, alignItems: 'center' }}>
+							<span style={{ fontSize: 12, color: 'var(--ink-soft)', whiteSpace: 'nowrap' }}>主題</span>
+							<input
+								defaultValue={boardTopic}
+								placeholder="選填,例:擎添工業組織"
+								onBlur={(e) => setBoardType(boardTypeKey, e.target.value)}
+								style={{ flex: 1, fontSize: 13, padding: '6px 8px', border: '1px solid var(--line)', borderRadius: 8 }}
+							/>
+						</div>
+					</div>
+				</div>
+			)}
+
+			{/* transient STT caption (UX feedback) */}
+			{subtitle && (
+				<div
+					className="modal-in"
+					style={{
+						position: 'fixed',
+						bottom: mobile ? 92 : 74,
+						left: '50%',
+						transform: 'translateX(-50%)',
+						zIndex: 1600,
+						maxWidth: '80vw',
+						padding: '8px 16px',
+						borderRadius: 12,
+						background: 'rgba(28,26,23,0.82)',
+						color: '#fff',
+						fontSize: 15,
+						textAlign: 'center',
+						pointerEvents: 'none',
+					}}
+				>
+					{subtitle}
 				</div>
 			)}
 
