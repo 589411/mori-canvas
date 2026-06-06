@@ -54,15 +54,19 @@ async fn duration_sec(path: &str) -> f64 {
         .unwrap_or(0.0) // unprobeable/empty (e.g. trimmed-away silence) => skip
 }
 
-async fn groq_whisper(path: &str) -> Result<String, String> {
+async fn groq_whisper(path: &str, prompt: &str) -> Result<String, String> {
     let key = groq_key().ok_or("雲端 STT 需要 Groq API key")?;
     let model = mori_config().get("providers").and_then(|p| p.get("groq")).and_then(|g| g.get("stt_model")).and_then(|m| m.as_str()).unwrap_or("whisper-large-v3-turbo").to_string();
     let buf = tokio::fs::read(path).await.map_err(|e| e.to_string())?;
-    let form = reqwest::multipart::Form::new()
+    let mut form = reqwest::multipart::Form::new()
         .part("file", reqwest::multipart::Part::bytes(buf).file_name("audio.wav"))
         .text("model", model)
         .text("response_format", "json")
         .text("language", "zh");
+    if !prompt.is_empty() {
+        // 詞彙表偏置:Whisper 只吃 ~224 tokens,glossary::whisper_prompt() 已截好
+        form = form.text("prompt", prompt.to_string());
+    }
     let res = reqwest::Client::new().post("https://api.groq.com/openai/v1/audio/transcriptions").header("Authorization", format!("Bearer {}", key)).multipart(form).send().await.map_err(|e| e.to_string())?;
     if !res.status().is_success() {
         return Err(format!("groq whisper {}", res.status()));
@@ -71,7 +75,7 @@ async fn groq_whisper(path: &str) -> Result<String, String> {
     Ok(d.get("text").and_then(|t| t.as_str()).unwrap_or("").trim().to_string())
 }
 
-async fn local_whisper(path: &str, url_override: &str) -> Result<String, String> {
+async fn local_whisper(path: &str, url_override: &str, prompt: &str) -> Result<String, String> {
     let url = if !url_override.trim().is_empty() {
         url_override.trim().to_string()
     } else {
@@ -79,7 +83,10 @@ async fn local_whisper(path: &str, url_override: &str) -> Result<String, String>
         format!("http://{}:{}{}", h, p, ip)
     };
     let buf = tokio::fs::read(path).await.map_err(|e| e.to_string())?;
-    let form = reqwest::multipart::Form::new().part("file", reqwest::multipart::Part::bytes(buf).file_name("audio.wav")).text("response_format", "json");
+    let mut form = reqwest::multipart::Form::new().part("file", reqwest::multipart::Part::bytes(buf).file_name("audio.wav")).text("response_format", "json");
+    if !prompt.is_empty() {
+        form = form.text("prompt", prompt.to_string()); // whisper.cpp server 同樣支援 prompt 欄位
+    }
     let res = reqwest::Client::new().post(&url).multipart(form).send().await.map_err(|e| format!("本機 whisper-server 連不到 {url}: {e}"))?;
     if !res.status().is_success() {
         return Err(format!("whisper-server {}", res.status()));
@@ -89,7 +96,9 @@ async fn local_whisper(path: &str, url_override: &str) -> Result<String, String>
 }
 
 /// mode: "mori" | "custom"; stt_source: "cloud" | "local"
-pub async fn transcribe(audio_path: &str, mode: &str, stt_source: &str, whisper_url: &str) -> Result<String, String> {
+/// `glossary_prompt`: 房間詞彙表做成的 Whisper initial prompt(空字串=不用)。
+/// 注意:mori-ear 模式吃不到 prompt(外部 CLI),詞彙表只在 custom 模式生效。
+pub async fn transcribe(audio_path: &str, mode: &str, stt_source: &str, whisper_url: &str, glossary_prompt: &str) -> Result<String, String> {
     if mode != "custom" {
         let out = tokio::process::Command::new(ear_path()).args(["--input", audio_path]).output().await.map_err(|e| format!("mori-ear: {e}"))?;
         return Ok(crate::llm::to_traditional(String::from_utf8_lossy(&out.stdout).trim()));
@@ -99,9 +108,9 @@ pub async fn transcribe(audio_path: &str, mode: &str, stt_source: &str, whisper_
     let result = if duration_sec(&trimmed).await < 0.35 {
         Ok(String::new()) // basically silence → skip
     } else if stt_source == "local" {
-        local_whisper(&trimmed, whisper_url).await
+        local_whisper(&trimmed, whisper_url, glossary_prompt).await
     } else {
-        groq_whisper(&trimmed).await
+        groq_whisper(&trimmed, glossary_prompt).await
     };
     if trimmed != audio_path {
         let _ = tokio::fs::remove_file(&trimmed).await;

@@ -313,7 +313,9 @@ pub async fn run_agent_turn(room: &Room, transcript: &str, by: &str, local_only:
     let existing = existing_stickies(room);
     let frames = frames_info(room);
     let context = store::read_transcript_tail(room, 10); // recent discussion context
-    let (result, provider) = plan_agent(transcript, &existing, &topic, &frames, &context, local_only, llm).await?;
+    let (gl_terms, _docs) = store::read_glossary(room); // 上傳文件萃取的詞彙表 → 專名校正
+    let glossary_block = crate::glossary::agent_block(&gl_terms);
+    let (result, provider) = plan_agent(transcript, &existing, &topic, &frames, &context, &glossary_block, local_only, llm).await?;
     match result {
         AgentResult::Command(cmd) => {
             let (label, view) = run_command(room, &existing, &cmd, spacing);

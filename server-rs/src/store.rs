@@ -38,6 +38,33 @@ pub fn set_meta(room: &Room, typ: Option<&str>, topic: Option<&str>) {
     }
 }
 
+/// 詞彙表:存在 meta map 的 "glossary"(terms JSON 字串)與 "glossaryDocs"(檔名清單 JSON 字串)。
+/// 跟 topic 一樣走 yjs doc → 跟房間共生死、自動同步給所有人。
+pub fn read_glossary(room: &Room) -> (Vec<Value>, Vec<String>) {
+    let doc = room.awareness.doc();
+    let meta = doc.get_or_insert_map("meta");
+    let txn = doc.transact();
+    let get_json = |k: &str| -> Option<Value> {
+        meta.get(&txn, k)
+            .and_then(|o| match any_to_json(&o.to_json(&txn)) {
+                Value::String(s) => Some(s),
+                _ => None,
+            })
+            .and_then(|s| serde_json::from_str(&s).ok())
+    };
+    let terms = get_json("glossary").and_then(|v| v.as_array().cloned()).unwrap_or_default();
+    let docs = get_json("glossaryDocs").and_then(|v| v.as_array().map(|a| a.iter().filter_map(|x| x.as_str().map(String::from)).collect())).unwrap_or_default();
+    (terms, docs)
+}
+
+pub fn set_glossary(room: &Room, terms: &[Value], docs: &[String]) {
+    let doc = room.awareness.doc();
+    let meta = doc.get_or_insert_map("meta");
+    let mut txn = doc.transact_mut();
+    meta.insert(&mut txn, "glossary", serde_json::to_string(&Value::Array(terms.to_vec())).unwrap_or_default());
+    meta.insert(&mut txn, "glossaryDocs", serde_json::to_string(&json!(docs)).unwrap_or_default());
+}
+
 /// apply tidy positions to shapes + sizes to frames in one transaction
 pub fn apply_tidy(room: &Room, positions: &[(String, f64, f64)], frame_sizes: &[(String, f64, f64)]) {
     let doc = room.awareness.doc();

@@ -235,6 +235,11 @@ export default function App() {
 	const [exportOpen, setExportOpen] = useState(false)
 	const [pngTransparent, setPngTransparent] = useState(false)
 	const [settingsOpen, setSettingsOpen] = useState(false)
+	// 會議參考文件 → 詞彙表:上傳議程/簡報等,AI 萃取專名,提高語音辨識與便利貼的專名正確率
+	const [docOpen, setDocOpen] = useState(false)
+	const [glossary, setGlossary] = useState<{ terms: any[]; docs: string[] }>({ terms: [], docs: [] })
+	const [docBusy, setDocBusy] = useState('')
+	const docFileRef = useRef<HTMLInputElement>(null)
 	const [menuOpen, setMenuOpen] = useState(false) // mobile top-bar overflow menu
 	const [installPrompt, setInstallPrompt] = useState<any>(null) // deferred PWA install prompt
 	const [iosInstallHint, setIosInstallHint] = useState(false)
@@ -474,6 +479,64 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 		}
 		if (patch.spacing !== undefined) tidy() // re-arrange so the new spacing shows immediately
 	}
+	// ── 會議參考文件 → 詞彙表 ──────────────────────────────────────────────
+	async function loadGlossary() {
+		const r = await fetch(`${SYNC_HTTP}/api/rooms/${encodeURIComponent(room)}/doc`)
+			.then((x) => x.json())
+			.catch(() => null)
+		if (r?.ok) setGlossary({ terms: r.terms || [], docs: r.docs || [] })
+	}
+	useEffect(() => {
+		loadGlossary()
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [room])
+	// 瀏覽器端抽純文字(server 不用裝任何解析器):pdf 用 pdfjs、docx 用 mammoth(動態載入,不肥大初始 bundle)
+	async function extractDocText(f: File): Promise<string> {
+		const n = f.name.toLowerCase()
+		if (n.endsWith('.pdf')) {
+			const pdfjs: any = await import('pdfjs-dist')
+			pdfjs.GlobalWorkerOptions.workerSrc = new URL('pdfjs-dist/build/pdf.worker.min.mjs', import.meta.url).toString()
+			const pdf = await pdfjs.getDocument({ data: await f.arrayBuffer() }).promise
+			let out = ''
+			for (let i = 1; i <= pdf.numPages; i++) {
+				const tc = await (await pdf.getPage(i)).getTextContent()
+				out += tc.items.map((it: any) => it.str).join(' ') + '\n'
+			}
+			return out
+		}
+		if (n.endsWith('.docx')) {
+			const mammoth: any = await import('mammoth/mammoth.browser')
+			return (await mammoth.extractRawText({ arrayBuffer: await f.arrayBuffer() })).value
+		}
+		return f.text() // txt / md / 其他純文字
+	}
+	async function uploadDoc(f: File) {
+		setDocBusy(`抽取「${f.name}」文字…`)
+		try {
+			const text = (await extractDocText(f)).trim()
+			if (!text) {
+				setDocBusy('')
+				alert('抽不到文字。掃描型 PDF(整頁是圖)要先 OCR,或改貼純文字。')
+				return
+			}
+			setDocBusy('AI 萃取詞彙表…')
+			const r = await fetch(`${SYNC_HTTP}/api/rooms/${encodeURIComponent(room)}/doc`, {
+				method: 'POST',
+				headers: { 'Content-Type': 'application/json', ...byoHeaders() },
+				body: JSON.stringify({ text: text.slice(0, 20000), name: f.name }),
+			}).then((x) => x.json())
+			if (r?.ok) setGlossary({ terms: r.terms || [], docs: r.docs || [] })
+			else alert(r?.error || '詞彙表萃取失敗')
+		} catch (e: any) {
+			alert(`文件處理失敗:${e?.message || e}`)
+		}
+		setDocBusy('')
+	}
+	async function clearGlossary() {
+		await fetch(`${SYNC_HTTP}/api/rooms/${encodeURIComponent(room)}/doc`, { method: 'DELETE' }).catch(() => {})
+		setGlossary({ terms: [], docs: [] })
+	}
+
 	// set this board's type/topic (server-side, authoritative) then re-arrange
 	async function setBoardType(key: string, topic?: string) {
 		await fetch(`${SYNC_HTTP}/api/rooms/${encodeURIComponent(room)}/meta`, {
@@ -1597,6 +1660,7 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 								<button className="btn-accent" onClick={(e) => { e.stopPropagation(); doInstall() }}>安裝 App / 加到主畫面</button>
 							)}
 							<button className="btn-soft" onClick={() => setExportOpen(true)}>匯出 / 會議紀錄</button>
+							<button onClick={() => setDocOpen(true)}>📄 會議文件{glossary.terms.length ? `·${glossary.terms.length}詞` : ''}</button>
 							<button onClick={() => setSettingsOpen(true)}>⚙ 設定</button>
 							<button onClick={() => toggleTheme()}>{theme === 'dark' ? '☀ 亮色主題' : '☾ 暗色主題'}</button>
 							<button onClick={() => setView({ x: 0, y: 0, scale: 1 })}>回正視圖</button>
@@ -1634,6 +1698,7 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 			{!mobile && (
 				<div className="glass float-in" style={appbar}>
 					<button title="匯出 / 輸出:會議摘要、Markdown、PNG、畫板存檔(可還原)" className="btn-soft" onClick={() => setExportOpen(true)}>匯出</button>
+					<button style={btn} title="上傳開會文件(議程/簡報/規格),AI 萃取詞彙表,提高語音辨識專名正確率" onClick={() => setDocOpen(true)}>📄{glossary.terms.length ? glossary.terms.length : ''}</button>
 					<button style={btn} title="設定:AI 雲端/本機、排列間距、自動重排" onClick={() => setSettingsOpen(true)}>⚙</button>
 					<button style={btn} title={theme === 'dark' ? '切換亮色主題' : '切換暗色主題'} onClick={toggleTheme}>{theme === 'dark' ? '☀' : '☾'}</button>
 					<button style={btn} title="視圖回到原點與原始縮放" onClick={() => setView({ x: 0, y: 0, scale: 1 })}>回正</button>
@@ -1711,6 +1776,49 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 								<div style={{ fontSize: 12, color: 'var(--ink-soft)' }}>{t.blurb}</div>
 							</button>
 						))}
+					</div>
+				</div>
+			)}
+
+			{/* 會議文件 / 詞彙表 dialog */}
+			{docOpen && (
+				<div
+					onClick={() => setDocOpen(false)}
+					style={{ position: 'fixed', inset: 0, zIndex: 3600, background: 'var(--scrim)', backdropFilter: 'blur(3px)', display: 'flex', alignItems: 'center', justifyContent: 'center', padding: 16 }}
+				>
+					<div className="glass modal-in" onClick={(e) => e.stopPropagation()} style={{ background: 'var(--surface)', width: 'min(440px, 92vw)', maxHeight: '88vh', overflowY: 'auto', padding: 22, borderRadius: 18 }}>
+						<div style={{ fontWeight: 700, fontSize: 16 }}>會議參考文件</div>
+						<div style={{ fontSize: 12, color: 'var(--ink-soft)', margin: '4px 0 14px', lineHeight: 1.6 }}>
+							上傳這場會議的議程、簡報、規格書(pdf / docx / txt / md),AI 會萃取<b>人名、產品名、術語</b>做成詞彙表:語音辨識聽得更準、便利貼上的專名不會寫錯。整個房間共用。
+						</div>
+						<input ref={docFileRef} type="file" accept=".pdf,.docx,.txt,.md,.markdown,text/plain" style={{ display: 'none' }} onChange={(e) => { const f = e.target.files?.[0]; if (f) uploadDoc(f); e.target.value = '' }} />
+						<button className="btn-accent" disabled={!!docBusy} style={{ width: '100%', marginBottom: 10 }} onClick={() => docFileRef.current?.click()}>
+							{docBusy || '＋ 上傳文件(可多份,詞彙會合併)'}
+						</button>
+						{glossary.docs.length > 0 && (
+							<div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 8 }}>已上傳:{glossary.docs.join('、')}</div>
+						)}
+						{glossary.terms.length > 0 ? (
+							<>
+								<div style={{ fontWeight: 600, fontSize: 13, margin: '6px 0' }}>詞彙表({glossary.terms.length})</div>
+								<div style={{ display: 'flex', flexWrap: 'wrap', gap: 6, marginBottom: 14 }}>
+									{glossary.terms.map((t: any, i: number) => (
+										<span key={i} title={[t.aliases?.length ? `聽錯常寫成:${t.aliases.join('、')}` : '', t.note || ''].filter(Boolean).join('\n')} style={{ fontSize: 12, padding: '3px 9px', borderRadius: 99, border: '1px solid var(--line)', background: 'var(--accent-soft)' }}>
+											{t.term}
+										</span>
+									))}
+								</div>
+								<button className="btn-danger" style={{ width: '100%', marginBottom: 6 }} onClick={() => { if (window.confirm('清空這個房間的詞彙表?')) clearGlossary() }}>清空詞彙表</button>
+							</>
+						) : (
+							!docBusy && <div className="muted" style={{ fontSize: 12, marginBottom: 10 }}>還沒有詞彙表。</div>
+						)}
+						<div style={{ fontSize: 11, color: 'var(--ink-soft)', lineHeight: 1.6 }}>
+							運作方式:詞彙表前段會做成 Whisper 的提示(偏置辨識),完整詞彙表會給 AI 在整理便利貼時校正聽錯的專名。「Mori 處理」模式的語音辨識吃不到提示,但 AI 校正仍有效。
+						</div>
+						<div style={{ display: 'flex', justifyContent: 'flex-end', marginTop: 12 }}>
+							<button onClick={() => setDocOpen(false)}>關閉</button>
+						</div>
 					</div>
 				</div>
 			)}

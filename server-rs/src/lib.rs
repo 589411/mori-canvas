@@ -1,6 +1,7 @@
 mod agent;
 mod apply;
 mod board_types;
+mod glossary;
 mod layout;
 mod llm;
 mod prompts;
@@ -442,6 +443,55 @@ pub async fn serve(port: u16) {
         Ok::<_, warp::Rejection>(warp::reply::json(&json!({ "ok": true, "frame": f })))
     });
 
+    // GET/POST/DELETE /api/rooms/:room/doc — 會議參考文件 → 詞彙表
+    // POST body: { "text": "<前端抽好的純文字>", "name": "<檔名,選填>" }
+    // 文字交給 LLM 萃取專有名詞,與既有詞彙表合併(以 term 去重)後存進房間 meta。
+    // 詞彙表之後用在:Whisper STT prompt(偏置)+ agent prompt(專名校正)。
+    let r_doc_g = rooms.clone();
+    let doc_get = warp::get().and(warp::path!("api" / "rooms" / String / "doc")).and(with(r_doc_g)).and_then(|name: String, rooms: sync::Rooms| async move {
+        let room = sync::get_or_create_room(&rooms, &name).await;
+        let (terms, docs) = store::read_glossary(&room);
+        Ok::<_, warp::Rejection>(warp::reply::json(&json!({ "ok": true, "terms": terms, "docs": docs })))
+    });
+    let r_doc_p = rooms.clone();
+    let doc_post = warp::post()
+        .and(warp::path!("api" / "rooms" / String / "doc"))
+        .and(warp::body::content_length_limit(4 * 1024 * 1024))
+        .and(warp::body::json())
+        .and(with(r_doc_p))
+        .and(warp::header::optional::<String>("x-forwarded-for"))
+        .and(llm_opts())
+        .and_then(|name: String, body: Value, rooms: sync::Rooms, xff: Option<String>, llm: llm::LlmOpts| async move {
+            if !rate_ok(&client_ip(&xff)).await {
+                return Ok::<_, warp::Rejection>(warp::reply::json(&json!({ "ok": false, "error": "太頻繁了,休息一下再試(demo 限流)" })));
+            }
+            let text = body.get("text").and_then(|v| v.as_str()).unwrap_or("").trim().to_string();
+            if text.is_empty() {
+                return Ok(warp::reply::json(&json!({ "ok": false, "error": "text required(前端先把文件抽成純文字)" })));
+            }
+            let doc_name: String = body.get("name").and_then(|v| v.as_str()).unwrap_or("未命名文件").chars().take(60).collect();
+            let s = SETTINGS.lock().await.clone();
+            let new_terms = match glossary::extract(&text, s.local_only, &llm).await {
+                Ok(t) => t,
+                Err(e) => return Ok(warp::reply::json(&json!({ "ok": false, "error": e }))),
+            };
+            let added = new_terms.len();
+            let room = sync::get_or_create_room(&rooms, &name).await;
+            let (existing, mut docs) = store::read_glossary(&room);
+            let merged = glossary::merge_terms(&existing, new_terms);
+            if !docs.contains(&doc_name) {
+                docs.push(doc_name.clone());
+            }
+            store::set_glossary(&room, &merged, &docs);
+            Ok(warp::reply::json(&json!({ "ok": true, "added": added, "terms": merged, "docs": docs })))
+        });
+    let r_doc_d = rooms.clone();
+    let doc_del = warp::delete().and(warp::path!("api" / "rooms" / String / "doc")).and(with(r_doc_d)).and_then(|name: String, rooms: sync::Rooms| async move {
+        let room = sync::get_or_create_room(&rooms, &name).await;
+        store::set_glossary(&room, &[], &[]);
+        Ok::<_, warp::Rejection>(warp::reply::json(&json!({ "ok": true })))
+    });
+
     // GET /api/export/:room
     let r_export = rooms.clone();
     let export = warp::get().and(warp::path!("api" / "export" / String)).and(with(r_export)).and_then(|name: String, rooms: sync::Rooms| async move {
@@ -524,15 +574,23 @@ pub async fn serve(port: u16) {
         })
     });
 
-    // POST /api/transcribe — audio -> text (no agent)
-    let transcribe_ep = warp::post().and(warp::path!("api" / "transcribe")).and(warp::query::<HashMap<String, String>>()).and(warp::body::bytes()).and(warp::header::optional::<String>("x-forwarded-for")).and_then(|q: HashMap<String, String>, body: bytes::Bytes, xff: Option<String>| async move {
+    // POST /api/transcribe — audio -> text (no agent);?room= 可帶房號以套用該房詞彙表
+    let r_transcribe = rooms.clone();
+    let transcribe_ep = warp::post().and(warp::path!("api" / "transcribe")).and(warp::query::<HashMap<String, String>>()).and(warp::body::bytes()).and(with(r_transcribe)).and(warp::header::optional::<String>("x-forwarded-for")).and_then(|q: HashMap<String, String>, body: bytes::Bytes, rooms: sync::Rooms, xff: Option<String>| async move {
         if !rate_ok(&client_ip(&xff)).await {
             return Ok::<_, warp::Rejection>(warp::reply::json(&json!({ "ok": false, "error": "太頻繁了,休息一下(demo 限流)" })));
         }
         let ext = sanitize_ext(q.get("ext").map(|s| s.as_str()).unwrap_or("webm"));
         let tmp = write_tmp("t", &ext, &body).await;
         let s = SETTINGS.lock().await.clone();
-        let r = stt::transcribe(&tmp, &s.mode, &s.stt_source, &s.whisper_url).await;
+        let gp = match q.get("room").map(|r| r.as_str()).filter(|r| !r.is_empty()) {
+            Some(rn) => {
+                let room = sync::get_or_create_room(&rooms, rn).await;
+                glossary::whisper_prompt(&store::read_glossary(&room).0)
+            }
+            None => String::new(),
+        };
+        let r = stt::transcribe(&tmp, &s.mode, &s.stt_source, &s.whisper_url, &gp).await;
         let _ = tokio::fs::remove_file(&tmp).await;
         Ok::<_, warp::Rejection>(match r {
             Ok(text) => warp::reply::json(&json!({ "ok": true, "text": text })),
@@ -550,7 +608,9 @@ pub async fn serve(port: u16) {
             let ext = sanitize_ext(q.get("ext").map(|s| s.as_str()).unwrap_or("webm"));
             let tmp = write_tmp("voice", &ext, &body).await;
             let s = SETTINGS.lock().await.clone();
-            let transcript = stt::transcribe(&tmp, &s.mode, &s.stt_source, &s.whisper_url).await;
+            let room = sync::get_or_create_room(&rooms, &name).await;
+            let gp = glossary::whisper_prompt(&store::read_glossary(&room).0); // 詞彙表 → Whisper 偏置
+            let transcript = stt::transcribe(&tmp, &s.mode, &s.stt_source, &s.whisper_url, &gp).await;
             let _ = tokio::fs::remove_file(&tmp).await;
             let transcript = match transcript {
                 Ok(t) => t,
@@ -560,7 +620,6 @@ pub async fn serve(port: u16) {
                 return Ok(warp::reply::json(&json!({ "ok": true, "transcript": "", "stickies": 0 })));
             }
             let by: String = q.get("by").map(|s| s.as_str()).unwrap_or("voice").chars().take(24).collect();
-            let room = sync::get_or_create_room(&rooms, &name).await;
             let _lk = room_lock(&name).await; let _guard = _lk.lock().await;
             let mut res = match apply::run_agent_turn(&room, &transcript, &by, s.local_only, s.auto_tidy, s.spacing, &llm).await {
                 Ok(v) => v,
@@ -581,9 +640,10 @@ pub async fn serve(port: u16) {
             let ext = sanitize_ext(q.get("ext").map(|s| s.as_str()).unwrap_or("webm"));
             let tmp = write_tmp("c", &ext, &body).await;
             let s = SETTINGS.lock().await.clone();
-            let transcript = stt::transcribe(&tmp, &s.mode, &s.stt_source, &s.whisper_url).await.unwrap_or_default();
-            let _ = tokio::fs::remove_file(&tmp).await;
             let room = sync::get_or_create_room(&rooms, &name).await;
+            let gp = glossary::whisper_prompt(&store::read_glossary(&room).0);
+            let transcript = stt::transcribe(&tmp, &s.mode, &s.stt_source, &s.whisper_url, &gp).await.unwrap_or_default();
+            let _ = tokio::fs::remove_file(&tmp).await;
             let cur = apply::card_current(&room, &card_id);
             if cur.is_none() {
                 return Ok::<_, warp::Rejection>(warp::reply::json(&json!({ "ok": false, "error": "card not found", "transcript": transcript })));
@@ -691,9 +751,12 @@ pub async fn serve(port: u16) {
         .or(export)
         .or(summary)
         .or(settings_get)
-        .or(settings_post);
+        .or(settings_post)
+        .or(doc_get)
+        .or(doc_post)
+        .or(doc_del);
 
-    let cors = warp::cors().allow_any_origin().allow_methods(vec!["GET", "POST", "OPTIONS"]).allow_headers(vec!["Content-Type", "x-llm-base", "x-llm-key", "x-llm-model"]);
+    let cors = warp::cors().allow_any_origin().allow_methods(vec!["GET", "POST", "DELETE", "OPTIONS"]).allow_headers(vec!["Content-Type", "x-llm-base", "x-llm-key", "x-llm-model"]);
     // serve the embedded client (single self-contained binary: client + sync + api on one port).
     // SPA fallback: unknown paths -> index.html.
     let serve_client = warp::get().and(warp::path::full()).map(|p: warp::path::FullPath| {

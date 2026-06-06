@@ -100,7 +100,7 @@ pub struct CardEdit {
 }
 
 
-fn extract_json(raw: &str) -> Option<Value> {
+pub(crate) fn extract_json(raw: &str) -> Option<Value> {
     let mut s = raw.to_string();
     // strip <think>...</think>
     while let (Some(a), Some(b)) = (s.find("<think>"), s.find("</think>")) {
@@ -293,7 +293,7 @@ fn parse_result(raw: &str, existing_count: usize) -> AgentResult {
     AgentResult::Content(parse_content_plan(&obj, existing_count))
 }
 
-pub async fn plan_agent(transcript: &str, existing: &[ExistingCard], topic: &str, frames: &[FrameInfo], context: &[String], local_only: bool, llm: &LlmOpts) -> Result<(AgentResult, String), String> {
+pub async fn plan_agent(transcript: &str, existing: &[ExistingCard], topic: &str, frames: &[FrameInfo], context: &[String], glossary_block: &str, local_only: bool, llm: &LlmOpts) -> Result<(AgentResult, String), String> {
     let topic_block = if topic.is_empty() { String::new() } else { format!("\n會議主題:「{}」", topic) };
     let frames_block = if frames.is_empty() {
         "\n\n目前畫布上沒有任何圖框(content 的第一段請用 \"frame\":{\"new\":{...}} 開一張新圖)。".to_string()
@@ -326,7 +326,7 @@ pub async fn plan_agent(transcript: &str, existing: &[ExistingCard], topic: &str
     } else {
         format!("\n\n剛才的會議逐字稿(脈絡,最新在最後;用來理解現在這句話在討論什麼,別把它當成新內容重複建卡):\n{}", context.join("\n"))
     };
-    let user = format!("使用者這段話(三引號內,可能是會議內容、也可能是給你的指令):\n\"\"\"\n{}\n\"\"\"{}{}{}{}{}", transcript, ctx_block, topic_block, frames_block, ref_block, existing_block);
+    let user = format!("使用者這段話(三引號內,可能是會議內容、也可能是給你的指令):\n\"\"\"\n{}\n\"\"\"{}{}{}{}{}{}", transcript, ctx_block, glossary_block, topic_block, frames_block, ref_block, existing_block);
     let messages = vec![Msg { role: "system", content: crate::prompts::prompt("board-agent") }, Msg { role: "user", content: user }];
     let (text, provider) = chat(&messages, true, local_only, llm).await?;
     Ok((parse_result(&text, existing.len()), provider))
