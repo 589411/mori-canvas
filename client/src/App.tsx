@@ -15,6 +15,7 @@ type Sticky = {
 	drawnBy?: string
 	owner?: string
 	tags?: string[]
+	notes?: { t: string; by: string; text: string }[] // 字卡語音 discuss 分流存的討論紀錄
 }
 type Connector = { id: string; from: string; to: string }
 
@@ -200,6 +201,38 @@ export default function App() {
 	useEffect(() => {
 		sizeRef.current = size
 	}, [size])
+	// 進房後第一次拿到卡片就自動 fit 一次(初始視角是原點,卡片離原點遠會一進來只看到空白)
+	const didInitialFit = useRef(false)
+	useEffect(() => {
+		if (didInitialFit.current || !shapes.length) return
+		didInitialFit.current = true
+		fitView()
+		// eslint-disable-next-line react-hooks/exhaustive-deps
+	}, [shapes])
+	// 回正 = zoom-to-fit:縮放平移到「看見全部卡片與圖框」;空板才回原點
+	function fitView() {
+		const xs: number[] = []
+		const ys: number[] = []
+		for (const s of shapes as any[]) {
+			xs.push(s.x, s.x + (s.w || 200))
+			ys.push(s.y, s.y + (s.h || 200))
+		}
+		for (const f of frames as any[]) {
+			xs.push(f.x, f.x + (f.w || 480))
+			ys.push(f.y, f.y + (f.h || 320))
+		}
+		if (!xs.length) {
+			animateViewTo({ x: 0, y: 0, scale: 1 })
+			return
+		}
+		const PAD = 60
+		const x0 = Math.min(...xs) - PAD
+		const x1 = Math.max(...xs) + PAD
+		const y0 = Math.min(...ys) - PAD
+		const y1 = Math.max(...ys) + PAD
+		const scale = Math.max(0.25, Math.min(1.5, Math.min(size.w / (x1 - x0), size.h / (y1 - y0))))
+		animateViewTo({ scale, x: (size.w - (x0 + x1) * scale) / 2, y: (size.h - (y0 + y1) * scale) / 2 })
+	}
 	function animateViewTo(target: { x: number; y: number; scale: number }) {
 		cancelAnimationFrame(followAnim.current)
 		const from = { ...viewRef.current }
@@ -234,6 +267,7 @@ export default function App() {
 		return m
 	}, [shapes])
 	const [selectedConnId, setSelectedConnId] = useState<string | null>(null)
+	const [cardPanel, setCardPanel] = useState(false) // 卡片編輯面板:雙擊才開(單擊=選取/拖移)
 	const [filter, setFilter] = useState<{ type: 'tag' | 'owner'; value: string } | null>(null)
 	const [connectMode, setConnectMode] = useState(false)
 	const [connectFrom, setConnectFrom] = useState<string | null>(null)
@@ -679,26 +713,33 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 		syncFrames()
 		syncT()
 		yShapes.observe(sync)
-		// 自動跟拍:AI/別人新增的卡片落在視野外 → 鏡頭平滑帶過去(自己加的、或剛在手動操作畫布時不搶鏡頭)
+		// 自動跟拍:AI/別人新增的卡片落在視野外 → 鏡頭平滑帶過去。
+		// 重點:不能立刻追 —— 新卡先被串流畫在暫定座標,server 緊接著 auto-tidy 重排;
+		// 收集這批新卡 id,等 1.1 秒沒有更多新卡(tidy 也排完了)再讀「最終位置」過去。
+		const pendingFollow: { ids: Set<string>; timer: any } = { ids: new Set(), timer: null }
 		const followNew = (e: any) => {
 			if (e.transaction?.origin === LOCAL) return
-			if (performance.now() - userPanTs.current < 4000) return
-			const added: any[] = []
 			e.changes?.keys?.forEach((ch: any, key: string) => {
 				if (ch.action !== 'add') return
 				const s: any = yShapes.get(key)
-				if (s && (s as any).type === 'sticky') added.push(s)
+				if (s && s.type === 'sticky') pendingFollow.ids.add(key)
 			})
-			if (!added.length) return
-			const v = viewRef.current
-			const sz = sizeRef.current
-			const wx0 = -v.x / v.scale
-			const wy0 = -v.y / v.scale
-			const inView = (s: any) => s.x >= wx0 && s.y >= wy0 && s.x + (s.w || 200) <= wx0 + sz.w / v.scale && s.y + (s.h || 200) <= wy0 + sz.h / v.scale
-			if (added.every(inView)) return
-			const cx = added.reduce((a, s) => a + s.x + (s.w || 200) / 2, 0) / added.length
-			const cy = added.reduce((a, s) => a + s.y + (s.h || 200) / 2, 0) / added.length
-			animateViewTo({ scale: v.scale, x: sz.w / 2 - cx * v.scale, y: sz.h / 2 - cy * v.scale })
+			if (!pendingFollow.ids.size) return
+			if (pendingFollow.timer) clearTimeout(pendingFollow.timer)
+			pendingFollow.timer = setTimeout(() => {
+				const cards: any[] = Array.from(pendingFollow.ids).map((k) => yShapes.get(k)).filter((s: any) => s && s.type === 'sticky')
+				pendingFollow.ids.clear()
+				if (!cards.length || performance.now() - userPanTs.current < 4000) return
+				const v = viewRef.current
+				const sz = sizeRef.current
+				const wx0 = -v.x / v.scale
+				const wy0 = -v.y / v.scale
+				const inView = (s: any) => s.x >= wx0 && s.y >= wy0 && s.x + (s.w || 200) <= wx0 + sz.w / v.scale && s.y + (s.h || 200) <= wy0 + sz.h / v.scale
+				if (cards.every(inView)) return
+				const cx = cards.reduce((a, s) => a + s.x + (s.w || 200) / 2, 0) / cards.length
+				const cy = cards.reduce((a, s) => a + s.y + (s.h || 200) / 2, 0) / cards.length
+				animateViewTo({ scale: v.scale, x: sz.w / 2 - cx * v.scale, y: sz.h / 2 - cy * v.scale })
+			}, 1100)
 		}
 		yShapes.observe(followNew)
 		yConnectors.observe(syncC)
@@ -739,7 +780,10 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 	// keyboard: undo/redo + delete (but not while editing text)
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
-			if (editing) return
+			if (editing || editingFrame) return
+			// 焦點在任何輸入框(負責人/標籤/房號…)時,Delete/Backspace 是在改字,不是要刪卡
+			const t = e.target as HTMLElement | null
+			if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
 			const mod = e.ctrlKey || e.metaKey
 			if (mod && e.key.toLowerCase() === 'z') {
 				e.preventDefault()
@@ -767,11 +811,12 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 				setSelectedId(null)
 				setSelectedConnId(null)
 				setConnectFrom(null)
+				setCardPanel(false)
 			}
 		}
 		window.addEventListener('keydown', onKey)
 		return () => window.removeEventListener('keydown', onKey)
-	}, [selectedId, selectedConnId, editing, undoMgr])
+	}, [selectedId, selectedConnId, editing, editingFrame, undoMgr])
 
 	useEffect(() => {
 		if (editing) editRef.current?.focus()
@@ -825,6 +870,31 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 		}
 		return null
 	}
+	// which sticky contains a canvas point — topmost wins(拖線放開時找落點卡片)
+	const stickyAt = (wx: number, wy: number) => {
+		for (let i = shapes.length - 1; i >= 0; i--) {
+			const s: any = shapes[i]
+			if (wx >= s.x && wx <= s.x + (s.w || 200) && wy >= s.y && wy <= s.y + (s.h || 200)) return s
+		}
+		return null
+	}
+	// 滑到卡片邊緣出現 + 把手,直接拉到另一張卡生成連線(make.com 式);多對多本來就支援
+	const [hoverId, setHoverId] = useState<string | null>(null)
+	const [linkDrag, setLinkDrag] = useState<{ from: string; x: number; y: number } | null>(null)
+	const hoverClearT = useRef<any>(null)
+	const hoverCard = (id: string | null) => {
+		if (hoverClearT.current) clearTimeout(hoverClearT.current)
+		if (id) setHoverId(id)
+		else hoverClearT.current = setTimeout(() => setHoverId(null), 160) // 留時間讓滑鼠移進把手
+	}
+	const finishLinkDrag = () => {
+		if (!linkDrag) return
+		const t = stickyAt(linkDrag.x, linkDrag.y)
+		const dup = t && connectors.some((c) => (c.from === linkDrag.from && c.to === t.id) || (c.from === t.id && c.to === linkDrag.from))
+		if (t && t.id !== linkDrag.from && !dup) addConnector(linkDrag.from, t.id)
+		setLinkDrag(null)
+		document.body.style.cursor = ''
+	}
 
 	function onStickyClick(s: Sticky) {
 		if (connectMode) {
@@ -835,7 +905,9 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 			}
 			return
 		}
+		// 單擊只選取(拖移/Delete);編輯面板要雙擊才開
 		setSelectedId(s.id)
+		setCardPanel(false)
 	}
 
 	function onStageDblClick(e: any) {
@@ -980,19 +1052,25 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 			setBusy('聽你說…')
 			try {
 				// AI understands the speech and updates this card's text / tags / owner / kind
-				const r = await fetch(`${SYNC_HTTP}/api/card/${encodeURIComponent(room)}/${encodeURIComponent(id)}?ext=${ext}`, {
+				const r = await fetch(`${SYNC_HTTP}/api/card/${encodeURIComponent(room)}/${encodeURIComponent(id)}?ext=${ext}&by=${encodeURIComponent(me.name)}`, {
 					method: 'POST',
 					headers: { 'Content-Type': type, ...byoHeaders() },
 					body: new Blob(chunks, { type }),
 				}).then((x) => x.json())
 				if (r.ok) {
 					showSubtitle(r.transcript)
-					const parts: string[] = []
-					if (r.edit?.text !== undefined) parts.push('文字')
-					if (r.edit?.tags) parts.push('標籤')
-					if (r.edit?.owner !== undefined) parts.push('負責人')
-					if (r.edit?.color) parts.push('分類')
-					setBusy(parts.length ? `已更新這張的 ${parts.join('、')}` : r.transcript ? '沒聽出要改什麼' : '沒聽到內容')
+					if (r.mode === 'discuss') {
+						setBusy(`💬 已記到這張卡的討論(${r.notes} 條)`)
+					} else if (r.mode === 'offtopic') {
+						setBusy('這段是別的主題 → 已丟回會議整理,稍後自動上板')
+					} else {
+						const parts: string[] = []
+						if (r.edit?.text !== undefined) parts.push('文字')
+						if (r.edit?.tags) parts.push('標籤')
+						if (r.edit?.owner !== undefined) parts.push('負責人')
+						if (r.edit?.color) parts.push('分類')
+						setBusy(parts.length ? `已更新這張的 ${parts.join('、')}` : r.transcript ? '沒聽出要改什麼' : '沒聽到內容')
+					}
 				} else setBusy(r.error ? `錯誤:${r.error}` : '錯誤')
 			} catch (e) {
 				setBusy(`錯誤:${(e as Error).message}`)
@@ -1345,8 +1423,19 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 						setConnectFrom(null)
 					}
 				}}
-				onMouseMove={publishCursor}
-				onMouseLeave={clearCursor}
+				onMouseMove={(e: any) => {
+					publishCursor(e)
+					if (linkDrag) {
+						const p = e.target.getStage().getRelativePointerPosition()
+						if (p) setLinkDrag((d) => (d ? { ...d, x: p.x, y: p.y } : d))
+					}
+				}}
+				onMouseUp={finishLinkDrag}
+				onMouseLeave={() => {
+					clearCursor()
+					if (linkDrag) setLinkDrag(null)
+					document.body.style.cursor = ''
+				}}
 				onTouchMove={onTouchMove}
 				onTouchEnd={onTouchEnd}
 				onDblClick={onStageDblClick}
@@ -1508,9 +1597,17 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 									}}
 								onClick={() => onStickyClick(s)}
 								onTap={() => onStickyClick(s)}
+								onMouseEnter={() => hoverCard(s.id)}
+								onMouseLeave={() => hoverCard(null)}
 								onDblClick={(e: any) => {
 									e.cancelBubble = true
-									setEditing({ id: s.id, value: s.text })
+									setSelectedId(s.id)
+									setCardPanel(true)
+								}}
+								onDblTap={(e: any) => {
+									e.cancelBubble = true
+									setSelectedId(s.id)
+									setCardPanel(true)
 								}}
 							>
 								<Rect
@@ -1549,8 +1646,13 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 								{/* content tags (top row) — click to filter by tag */}
 								{(() => {
 									let tx = 32
+									const maxX = s.w - 10 // 膠囊不超出卡片右緣
 									return (s.tags || []).slice(0, 2).map((t, i) => {
-										const w = t.length * 11 + 12
+										// CJK ~11px、ASCII ~6.5px(10.5px 字級的實際寬),不再用一律 11 高估/爆框
+										const est = Array.from(t).reduce((a, ch) => a + (ch.charCodeAt(0) > 255 ? 11 : 6.5), 0) + 14
+										const remain = maxX - tx
+										if (remain < 34) return null // 剩餘空間連縮寫都塞不下,整顆不畫
+										const w = Math.min(est, remain)
 										const x = tx
 										tx += w + 5
 										return (
@@ -1562,7 +1664,7 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 												onTap={(e: any) => { e.cancelBubble = true; setFilter({ type: 'tag', value: t }) }}
 											>
 												<Rect width={w} height={17} cornerRadius={8} fill="rgba(28,26,23,0.1)" />
-												<Text x={6} y={3} text={t} fontSize={10.5} fontFamily={CANVAS_FONT} fill="rgba(28,26,23,0.6)" />
+												<Text x={6} y={3} width={w - 10} wrap="none" ellipsis text={t} fontSize={10.5} fontFamily={CANVAS_FONT} fill="rgba(28,26,23,0.6)" />
 											</Group>
 										)
 									})
@@ -1584,9 +1686,64 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 										</Group>
 									)
 								})()}
+								{/* 討論紀錄徽章(右下) — 點開編輯面板看內容 */}
+								{(s.notes?.length ?? 0) > 0 && (
+									<Group
+										x={s.w - 48}
+										y={s.h - 27}
+										onClick={(e: any) => { e.cancelBubble = true; setSelectedId(s.id); setCardPanel(true) }}
+										onTap={(e: any) => { e.cancelBubble = true; setSelectedId(s.id); setCardPanel(true) }}
+									>
+										<Rect width={38} height={19} cornerRadius={9.5} fill="rgba(28,26,23,0.1)" />
+										<Text x={5} y={3.5} text={`💬${s.notes!.length}`} fontSize={11} fontFamily={CANVAS_FONT} fill="rgba(28,26,23,0.65)" />
+									</Group>
+								)}
 							</Group>
 						)
 					})}
+					{/* 拖線連接:hover 卡片四側出現 + 把手,按住拉到另一張卡放開 = 連線 */}
+					{(() => {
+						const hs: any = hoverId && byId(hoverId)
+						if (!hs || linkDrag) return null
+						const pts = [
+							{ x: hs.x, y: hs.y + hs.h / 2 },
+							{ x: hs.x + hs.w, y: hs.y + hs.h / 2 },
+							{ x: hs.x + hs.w / 2, y: hs.y },
+							{ x: hs.x + hs.w / 2, y: hs.y + hs.h },
+						]
+						return pts.map((p, i) => (
+							<Group
+								key={'lh' + i}
+								x={p.x}
+								y={p.y}
+								onMouseEnter={() => { hoverCard(hs.id); document.body.style.cursor = 'crosshair' }}
+								onMouseLeave={() => { hoverCard(null); document.body.style.cursor = '' }}
+								onMouseDown={(e: any) => {
+									e.cancelBubble = true
+									setLinkDrag({ from: hs.id, x: p.x, y: p.y })
+								}}
+							>
+								<Circle radius={11} fill={theme === 'dark' ? '#2a2722' : '#ffffff'} stroke={ACCENT} strokeWidth={1.6} shadowColor="#1c1a17" shadowOpacity={0.25} shadowBlur={6} shadowOffsetY={2} />
+								<Text x={-11} y={-8} width={22} align="center" text="+" fontSize={16} fontStyle="600" fontFamily={CANVAS_FONT} fill={ACCENT} listening={false} />
+							</Group>
+						))
+					})()}
+					{/* 拖線中的虛線箭頭(自己畫面的預覽,放開才寫進共筆) */}
+					{linkDrag &&
+						(() => {
+							const a: any = byId(linkDrag.from)
+							if (!a) return null
+							const [x1, y1] = edgePoint(a.x + a.w / 2, a.y + a.h / 2, a.w / 2, a.h / 2, linkDrag.x, linkDrag.y)
+							const target: any = stickyAt(linkDrag.x, linkDrag.y)
+							return (
+								<>
+									{target && target.id !== linkDrag.from && (
+										<Rect x={target.x - 4} y={target.y - 4} width={target.w + 8} height={target.h + 8} cornerRadius={18} stroke={ACCENT} strokeWidth={2.5} dash={[6, 4]} listening={false} />
+									)}
+									<Arrow points={[x1, y1, linkDrag.x, linkDrag.y]} stroke={ACCENT} fill={ACCENT} strokeWidth={2.5} dash={[8, 6]} pointerLength={10} pointerWidth={10} listening={false} />
+								</>
+							)
+						})()}
 					{/* live cursors of everyone else (Mori + other humans) */}
 					{cursors.map((c) => (
 						<Group key={c.id} x={c.x} y={c.y} listening={false}>
@@ -1729,7 +1886,7 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 							<button onClick={() => setDocOpen(true)}>📄 會議文件{glossary.terms.length ? `·${glossary.terms.length}詞` : ''}</button>
 							<button onClick={() => setSettingsOpen(true)}>⚙ 設定</button>
 							<button onClick={() => toggleTheme()}>{theme === 'dark' ? '☀ 亮色主題' : '☾ 暗色主題'}</button>
-							<button onClick={() => setView({ x: 0, y: 0, scale: 1 })}>回正視圖</button>
+							<button onClick={() => fitView()}>回正(看全部)</button>
 							<button onClick={() => setGuide(true)}>? 使用說明</button>
 							<button className="btn-danger" onClick={() => { if (window.confirm('清空整個房間給所有人?')) clearAll() }}>清空房間</button>
 						</div>
@@ -1767,14 +1924,15 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 					<button style={btn} title="上傳開會文件(議程/簡報/規格),AI 萃取詞彙表,提高語音辨識專名正確率" onClick={() => setDocOpen(true)}>📄{glossary.terms.length ? glossary.terms.length : ''}</button>
 					<button style={btn} title="設定:AI 雲端/本機、排列間距、自動重排" onClick={() => setSettingsOpen(true)}>⚙</button>
 					<button style={btn} title={theme === 'dark' ? '切換亮色主題' : '切換暗色主題'} onClick={toggleTheme}>{theme === 'dark' ? '☀' : '☾'}</button>
-					<button style={btn} title="視圖回到原點與原始縮放" onClick={() => setView({ x: 0, y: 0, scale: 1 })}>回正</button>
+					<button style={btn} title="回正:縮放到看見全部卡片(空板回原點)" onClick={() => fitView()}>回正</button>
 					<button className="btn-danger" title="清空整個房間(會清掉所有人的板,請小心)" onClick={() => { if (window.confirm('清空整個房間給所有人?')) clearAll() }}>清空</button>
 					<button style={btn} title="使用說明 / 新手引導" onClick={() => setGuide(true)}>?</button>
 				</div>
 			)}
 
-			{/* contextual color + delete popover for a selected sticky */}
+			{/* contextual color + delete popover — 雙擊卡片才開(單擊只選取) */}
 			{selectedId &&
+				cardPanel &&
 				byId(selectedId) &&
 				(() => {
 					const s = byId(selectedId)!
@@ -1788,7 +1946,19 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 										<button key={c} title={KIND_LABEL[c]} onClick={() => patchShape(selectedId, { color: c })} style={{ width: 26, height: 26, padding: 0, borderRadius: '50%', background: COLORS[c], border: s.color === c ? '2px solid var(--ink)' : '2px solid var(--surface)', boxShadow: '0 1px 3px rgba(28,26,23,0.25)' }} />
 									))}
 								</div>
+								<textarea placeholder="卡片文字" value={s.text || ''} onChange={(e) => patchShape(selectedId, { text: e.target.value.slice(0, 120) })} rows={2} style={{ width: '100%', fontSize: 13, padding: '7px 9px', boxSizing: 'border-box', resize: 'none', fontFamily: 'inherit' }} />
 								<input placeholder="負責人" value={s.owner || ''} onChange={(e) => patchShape(selectedId, { owner: e.target.value.slice(0, 12) })} style={{ width: '100%', fontSize: 12, padding: '7px 9px', boxSizing: 'border-box' }} />
+								{(s.notes?.length ?? 0) > 0 && (
+									<div style={{ maxHeight: 130, overflowY: 'auto', border: '1px solid var(--line)', borderRadius: 8, padding: '6px 8px', fontSize: 12 }}>
+										<div className="muted" style={{ fontSize: 11, marginBottom: 4 }}>💬 討論紀錄 · {s.notes!.length} 條(對著卡片講話會記在這)</div>
+										{s.notes!.map((n, i) => (
+											<div key={i} style={{ marginBottom: 4, lineHeight: 1.5 }}>
+												<span className="muted" style={{ fontSize: 10 }}>{(n.t || '').slice(11, 16)} {n.by} </span>
+												{n.text}
+											</div>
+										))}
+									</div>
+								)}
 								<input placeholder="標籤(用空格分隔)" value={(s.tags || []).join(' ')} onChange={(e) => patchShape(selectedId, { tags: e.target.value.split(/[\s,]+/).filter(Boolean).slice(0, 3) })} style={{ width: '100%', fontSize: 12, padding: '7px 9px', boxSizing: 'border-box' }} />
 								<div style={{ display: 'flex', gap: 8 }}>
 									<button title="用語音改這張卡的內容/標籤/負責人(再按一次停止)" className={`btn-soft${cardRecId === selectedId ? ' live' : ''}`} style={{ flex: 1, ...(cardRecId === selectedId ? { background: 'var(--live)', color: '#fff', borderColor: 'var(--live)' } : {}) }} onClick={() => dictateCard(selectedId)}>{cardRecId === selectedId ? '■ 停止' : '● 語音'}</button>

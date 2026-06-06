@@ -273,12 +273,73 @@ pub fn run_command(room: &Room, existing: &[ExistingCard], cmd: &AgentCommand, s
     }
 }
 
-pub fn card_current(room: &Room, id: &str) -> Option<(String, Option<String>, Option<Vec<String>>)> {
+/// 直接用兩張卡的 id 畫一條連線(harness 跑題新卡 → 來源卡用)
+pub fn connect_ids(room: &Room, from_id: &str, to_id: &str) {
+    if from_id == to_id {
+        return;
+    }
+    let doc = room.awareness.doc();
+    let connectors = doc.get_or_insert_map("connectors");
+    let mut txn = doc.transact_mut();
+    // 已有同一對(不分方向)就不重畫
+    let dup = connectors.iter(&txn).any(|(_, v)| {
+        let j = any_to_json(&v.to_json(&txn));
+        let f = j.get("from").and_then(|x| x.as_str()).unwrap_or("");
+        let t = j.get("to").and_then(|x| x.as_str()).unwrap_or("");
+        (f == from_id && t == to_id) || (f == to_id && t == from_id)
+    });
+    if !dup {
+        let cid = format!("conn-{}", rid());
+        connectors.insert(&mut txn, cid.clone(), json_to_any(&json!({ "id": cid, "from": from_id, "to": to_id })));
+    }
+}
+
+/// 把一段討論記到卡片的 notes(時間/發言人/內容);回傳記了之後的總數
+pub fn append_card_note(room: &Room, card_id: &str, by: &str, text: &str) -> Option<usize> {
+    let doc = room.awareness.doc();
+    let shapes = doc.get_or_insert_map("shapes");
+    let mut txn = doc.transact_mut();
+    let cur = shapes.get(&txn, card_id)?;
+    let mut v = any_to_json(&cur.to_json(&txn));
+    let mut notes = v.get("notes").and_then(|n| n.as_array()).cloned().unwrap_or_default();
+    let ts = chrono_lite_now();
+    notes.push(json!({ "t": ts, "by": by, "text": text.chars().take(500).collect::<String>() }));
+    if notes.len() > 100 {
+        let cut = notes.len() - 100; // 防失控:每張卡最多留 100 條
+        notes.drain(0..cut);
+    }
+    let count = notes.len();
+    v["notes"] = json!(notes);
+    shapes.insert(&mut txn, card_id.to_string(), json_to_any(&v));
+    Some(count)
+}
+
+/// ISO-ish timestamp(UTC,秒級)— 不為了時間戳拉一整顆 chrono
+fn chrono_lite_now() -> String {
+    let secs = std::time::SystemTime::now().duration_since(std::time::UNIX_EPOCH).map(|d| d.as_secs()).unwrap_or(0);
+    // days since epoch → y/m/d (civil algorithm)
+    let days = (secs / 86400) as i64;
+    let (h, m, s) = ((secs % 86400) / 3600, (secs % 3600) / 60, secs % 60);
+    let z = days + 719468;
+    let era = z.div_euclid(146097);
+    let doe = z.rem_euclid(146097);
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146096) / 365;
+    let y = yoe + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let mo = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = if mo <= 2 { y + 1 } else { y };
+    format!("{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z", y, mo, d, h, m, s)
+}
+
+pub fn card_current(room: &Room, id: &str) -> Option<(String, Option<String>, Option<Vec<String>>, String)> {
     store::read_map(room, "shapes").into_iter().find(|s| s.get("id").and_then(|v| v.as_str()) == Some(id)).map(|s| {
         (
             s.get("text").and_then(|v| v.as_str()).unwrap_or("").to_string(),
             s.get("owner").and_then(|v| v.as_str()).map(|x| x.to_string()),
             s.get("tags").and_then(|v| v.as_array()).map(|a| a.iter().filter_map(|t| t.as_str().map(|x| x.to_string())).collect()),
+            s.get("color").and_then(|v| v.as_str()).unwrap_or("yellow").to_string(),
         )
     })
 }

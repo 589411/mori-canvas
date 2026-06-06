@@ -231,7 +231,19 @@ fn export_markdown(room: &sync::Room) -> String {
         for s in cards {
             let color = s.get("color").and_then(|v| v.as_str()).unwrap_or("yellow");
             let cat = board_types::color_label(bt, color).unwrap_or("其他").to_string();
-            by_cat.entry(cat).or_default().push(format!("- {}{}{}", s.get("text").and_then(|v| v.as_str()).unwrap_or(""), named(s), tagstr(s)));
+            let mut line = format!("- {}{}{}", s.get("text").and_then(|v| v.as_str()).unwrap_or(""), named(s), tagstr(s));
+            // 卡片的討論紀錄(字卡語音 discuss 分流存的)跟著卡片輸出
+            if let Some(notes) = s.get("notes").and_then(|v| v.as_array()) {
+                for n in notes {
+                    let nt = n.get("text").and_then(|x| x.as_str()).unwrap_or("");
+                    if nt.is_empty() {
+                        continue;
+                    }
+                    let nb = n.get("by").and_then(|x| x.as_str()).unwrap_or("");
+                    line += &format!("\n  - 💬 {}{}", if nb.is_empty() { String::new() } else { format!("{}:", nb) }, nt);
+                }
+            }
+            by_cat.entry(cat).or_default().push(line);
         }
         let mut out = format!("{} {}\n", hlevel, heading);
         let mut cats: Vec<String> = order.iter().filter_map(|c| board_types::color_label(bt, c)).map(|s| s.to_string()).collect();
@@ -664,27 +676,45 @@ pub async fn serve(port: u16) {
             if transcript.trim().is_empty() {
                 return Ok(warp::reply::json(&json!({ "ok": true, "transcript": "", "edit": {} })));
             }
-            let (text, owner, tags) = cur.unwrap();
-            let _lk = room_lock(&name).await; let _guard = _lk.lock().await;
-            let edit = match agent::plan_card_edit(&transcript, &text, owner.as_deref(), tags.as_deref(), s.local_only, &llm).await {
-                Ok(e) => e,
-                Err(e) => return Ok(warp::reply::json(&json!({ "ok": false, "error": e, "transcript": transcript }))),
-            };
-            apply::apply_card_edit(&room, &card_id, &edit);
-            let mut ej = serde_json::Map::new();
-            if let Some(t) = &edit.text {
-                ej.insert("text".into(), json!(t));
+            let (text, owner, tags, color) = cur.unwrap();
+            let by: String = q.get("by").map(|s| s.as_str()).unwrap_or("voice").chars().take(24).collect();
+            // 三分流:edit=改卡片欄位 / discuss=記進這張卡的討論紀錄 / offtopic=丟回房間聚合整理
+            // (harness 關閉時維持舊行為:一律當 edit)
+            let route = if s.harness { harness::card_route(&transcript, &text, harness::color_zh(&color), s.local_only, &llm).await } else { "edit" };
+            match route {
+                "discuss" => {
+                    let n = apply::append_card_note(&room, &card_id, &by, transcript.trim());
+                    Ok(warp::reply::json(&json!({ "ok": true, "mode": "discuss", "transcript": transcript, "notes": n.unwrap_or(0) })))
+                }
+                "offtopic" => {
+                    let mut res = harness::buffer_content(&name, room.clone(), &transcript, &by, Some(card_id.clone()), s.local_only, s.auto_tidy, s.spacing, &llm).await;
+                    res["mode"] = json!("offtopic");
+                    res["transcript"] = json!(transcript);
+                    Ok(warp::reply::json(&res))
+                }
+                _ => {
+                    let _lk = room_lock(&name).await; let _guard = _lk.lock().await;
+                    let edit = match agent::plan_card_edit(&transcript, &text, owner.as_deref(), tags.as_deref(), s.local_only, &llm).await {
+                        Ok(e) => e,
+                        Err(e) => return Ok(warp::reply::json(&json!({ "ok": false, "error": e, "transcript": transcript }))),
+                    };
+                    apply::apply_card_edit(&room, &card_id, &edit);
+                    let mut ej = serde_json::Map::new();
+                    if let Some(t) = &edit.text {
+                        ej.insert("text".into(), json!(t));
+                    }
+                    if let Some(t) = &edit.tags {
+                        ej.insert("tags".into(), json!(t));
+                    }
+                    if let Some(o) = &edit.owner {
+                        ej.insert("owner".into(), json!(o));
+                    }
+                    if let Some(c) = &edit.color {
+                        ej.insert("color".into(), json!(c));
+                    }
+                    Ok(warp::reply::json(&json!({ "ok": true, "mode": "edit", "transcript": transcript, "edit": ej })))
+                }
             }
-            if let Some(t) = &edit.tags {
-                ej.insert("tags".into(), json!(t));
-            }
-            if let Some(o) = &edit.owner {
-                ej.insert("owner".into(), json!(o));
-            }
-            if let Some(c) = &edit.color {
-                ej.insert("color".into(), json!(c));
-            }
-            Ok(warp::reply::json(&json!({ "ok": true, "transcript": transcript, "edit": ej })))
         },
     );
 

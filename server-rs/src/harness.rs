@@ -42,17 +42,28 @@ struct Ctx {
     llm: LlmOpts,
 }
 
+/// buffer 裡的一段話;focus = 這段是「對著某張卡」講但跑題的內容
+/// (flush 長出新卡時,會自動連回那張來源卡)
+#[derive(Clone)]
+struct Seg {
+    line: String, // "發言人:內容"
+    focus: Option<String>,
+}
+
 struct Buf {
-    segs: Vec<String>, // "發言人:內容"
+    segs: Vec<Seg>,
     chars: usize,
     last_add: Instant,
     watched: bool, // 已有 watcher task 在看著
     ctx: Ctx,
 }
 impl Buf {
-    fn drain(&mut self) -> Vec<String> {
+    fn drain(&mut self) -> Vec<Seg> {
         self.chars = 0;
         std::mem::take(&mut self.segs)
+    }
+    fn text(&self) -> String {
+        self.segs.iter().map(|s| s.line.as_str()).collect::<Vec<_>>().join("\n")
     }
 }
 
@@ -65,6 +76,14 @@ fn parse_gate(raw: &str) -> &'static str {
         Some("command") => "command",
         Some("noise") => "noise",
         _ => "content", // 解析不出來 → 當 content,寧可進 buffer 也不丟內容
+    }
+}
+
+fn parse_card_route(raw: &str) -> &'static str {
+    match agent::extract_json(raw).and_then(|o| o.get("route").and_then(|k| k.as_str()).map(String::from)).as_deref() {
+        Some("edit") => "edit",
+        Some("offtopic") => "offtopic",
+        _ => "discuss", // 拿不準 → 記成討論(寧可記下來,不要亂改卡或亂開新卡)
     }
 }
 
@@ -119,7 +138,7 @@ fn parse_dedup(raw: &str, existing_count: usize) -> Dedup {
     }
 }
 
-fn color_zh(c: &str) -> &'static str {
+pub(crate) fn color_zh(c: &str) -> &'static str {
     match c {
         "yellow" => "主題",
         "green" => "待辦",
@@ -136,6 +155,16 @@ async fn gate(text: &str, local_only: bool, llm: &LlmOpts) -> &'static str {
     match chat(&msgs, true, local_only, llm).await {
         Ok((out, _)) => parse_gate(&out),
         Err(_) => "content", // gate 掛了不丟內容
+    }
+}
+
+/// 字卡語音的三分流:這段話是要「改這張卡」「討論這張卡」還是「跑題」?
+pub async fn card_route(transcript: &str, card_text: &str, card_kind_zh: &str, local_only: bool, llm: &LlmOpts) -> &'static str {
+    let user = format!("這張卡片:「{}」(類型:{})\n\n使用者這段話:「{}」", card_text, card_kind_zh, transcript);
+    let msgs = [Msg { role: "system", content: crate::prompts::prompt("card-gate") }, Msg { role: "user", content: user }];
+    match chat(&msgs, true, local_only, llm).await {
+        Ok((out, _)) => parse_card_route(&out),
+        Err(_) => "discuss", // 分流掛了 → 至少記下來
     }
 }
 
@@ -194,11 +223,13 @@ fn pick_frame(room: &Room, existing: &[agent::ExistingCard]) -> String {
 
 // ── flush:buffer → 蒸餾 → 去重 → 上板 ───────────────────────────────
 
-async fn flush(room_name: String, ctx: Ctx, segs: Vec<String>) {
+async fn flush(room_name: String, ctx: Ctx, segs: Vec<Seg>) {
     if segs.is_empty() {
         return;
     }
-    let text = segs.join("\n");
+    let text = segs.iter().map(|s| s.line.as_str()).collect::<Vec<_>>().join("\n");
+    // 這批內容若是「對著某張卡」跑題長出來的,記住來源卡,等下自動連線
+    let focus: Option<String> = segs.iter().rev().find_map(|s| s.focus.clone());
     let points = distill(&text, &ctx.room, ctx.local_only, &ctx.llm).await;
     if points.is_empty() {
         return;
@@ -222,6 +253,12 @@ async fn flush(room_name: String, ctx: Ctx, segs: Vec<String>) {
     let frame_id = pick_frame(&ctx.room, &existing);
     let existing_ids: Vec<String> = existing.iter().map(|c| c.id.clone()).collect();
     let (ids, _drawn) = apply::apply_plan(&ctx.room, &plan, "Mori", &existing_ids, Some(&frame_id)).await;
+    // 跑題內容長出的新卡 → 自動連回來源卡(討論是從那張卡岔出去的)
+    if let Some(src) = focus.filter(|f| existing_ids.iter().any(|id| id == f)) {
+        for nid in &ids {
+            apply::connect_ids(&ctx.room, &src, nid);
+        }
+    }
     if ctx.auto_tidy && (!ids.is_empty() || !plan.updates.is_empty()) {
         apply::tidy_board(&ctx.room, ctx.spacing);
     }
@@ -267,39 +304,44 @@ pub async fn ingest(room_name: &str, room: Arc<Room>, transcript: &str, by: &str
             }
         }
         "noise" => json!({ "ok": true, "intent": "noise", "stickies": 0, "connectors": 0 }),
-        _ => {
-            let seg = format!("{}:{}", by, transcript.trim());
-            let ctx = Ctx { room: room.clone(), local_only, auto_tidy, spacing, llm: llm.clone() };
-            // 1) 快照目前 buffer(鎖內不打 LLM)
-            let buffer_text = {
-                let bufs = BUFS.lock().await;
-                bufs.get(room_name).map(|b| b.segs.join("\n")).unwrap_or_default()
-            };
-            // 2) 話題轉換偵測(buffer 非空才需要)
-            let shifted = !buffer_text.is_empty() && topic_shifted(&buffer_text, transcript, local_only, llm).await;
-            // 3) 進 buffer;決定要不要 flush
-            let (old_batch, full_batch, buffered, spawn_watcher) = {
-                let mut bufs = BUFS.lock().await;
-                let b = bufs.entry(room_name.to_string()).or_insert_with(|| Buf { segs: vec![], chars: 0, last_add: Instant::now(), watched: false, ctx: ctx.clone() });
-                b.ctx = ctx.clone(); // settings/byo 以最後一段為準
-                let old = if shifted { Some(b.drain()) } else { None }; // 換話題:舊話先上板
-                b.chars += seg.chars().count();
-                b.segs.push(seg);
-                b.last_add = Instant::now();
-                let full = if b.chars >= MAX_BUFFER_CHARS { Some(b.drain()) } else { None };
-                let watch = if b.watched { false } else { b.watched = true; true };
-                (old, full, b.chars, watch)
-            };
-            if spawn_watcher {
-                tokio::spawn(watch_loop(room_name.to_string()));
-            }
-            for batch in [old_batch, full_batch].into_iter().flatten() {
-                let (rn, c) = (room_name.to_string(), ctx.clone());
-                tokio::spawn(async move { flush(rn, c, batch).await });
-            }
-            json!({ "ok": true, "intent": "buffered", "queued": true, "buffered": buffered, "shifted": shifted, "stickies": 0, "connectors": 0 })
-        }
+        _ => buffer_content(room_name, room, transcript, by, None, local_only, auto_tidy, spacing, llm).await,
     }
+}
+
+/// 把一段「會議內容」放進房間 buffer(gate 已判定/或來源已知是內容)。
+/// `focus` = 這段是對著某張卡講但跑題的內容,flush 長新卡時會自動連回它。
+#[allow(clippy::too_many_arguments)]
+pub async fn buffer_content(room_name: &str, room: Arc<Room>, transcript: &str, by: &str, focus: Option<String>, local_only: bool, auto_tidy: bool, spacing: f64, llm: &LlmOpts) -> Value {
+    let seg = Seg { line: format!("{}:{}", by, transcript.trim()), focus };
+    let ctx = Ctx { room: room.clone(), local_only, auto_tidy, spacing, llm: llm.clone() };
+    // 1) 快照目前 buffer(鎖內不打 LLM)
+    let buffer_text = {
+        let bufs = BUFS.lock().await;
+        bufs.get(room_name).map(|b| b.text()).unwrap_or_default()
+    };
+    // 2) 話題轉換偵測(buffer 非空才需要)
+    let shifted = !buffer_text.is_empty() && topic_shifted(&buffer_text, transcript, local_only, llm).await;
+    // 3) 進 buffer;決定要不要 flush
+    let (old_batch, full_batch, buffered, spawn_watcher) = {
+        let mut bufs = BUFS.lock().await;
+        let b = bufs.entry(room_name.to_string()).or_insert_with(|| Buf { segs: vec![], chars: 0, last_add: Instant::now(), watched: false, ctx: ctx.clone() });
+        b.ctx = ctx.clone(); // settings/byo 以最後一段為準
+        let old = if shifted { Some(b.drain()) } else { None }; // 換話題:舊話先上板
+        b.chars += seg.line.chars().count();
+        b.segs.push(seg);
+        b.last_add = Instant::now();
+        let full = if b.chars >= MAX_BUFFER_CHARS { Some(b.drain()) } else { None };
+        let watch = if b.watched { false } else { b.watched = true; true };
+        (old, full, b.chars, watch)
+    };
+    if spawn_watcher {
+        tokio::spawn(watch_loop(room_name.to_string()));
+    }
+    for batch in [old_batch, full_batch].into_iter().flatten() {
+        let (rn, c) = (room_name.to_string(), ctx.clone());
+        tokio::spawn(async move { flush(rn, c, batch).await });
+    }
+    json!({ "ok": true, "intent": "buffered", "queued": true, "buffered": buffered, "shifted": shifted, "stickies": 0, "connectors": 0 })
 }
 
 #[cfg(test)]
@@ -313,6 +355,14 @@ mod tests {
         assert_eq!(parse_gate(r#"{"kind":"content"}"#), "content");
         assert_eq!(parse_gate("亂回一通"), "content"); // 解析失敗不丟內容
         assert_eq!(parse_gate(r#"{"kind":"banana"}"#), "content");
+    }
+
+    #[test]
+    fn card_route_parses_and_defaults_discuss() {
+        assert_eq!(parse_card_route(r#"{"route":"edit"}"#), "edit");
+        assert_eq!(parse_card_route(r#"{"route":"offtopic"}"#), "offtopic");
+        assert_eq!(parse_card_route(r#"{"route":"discuss"}"#), "discuss");
+        assert_eq!(parse_card_route("garbage"), "discuss"); // 拿不準 → 記下來最安全
     }
 
     #[test]
