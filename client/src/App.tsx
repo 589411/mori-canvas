@@ -628,7 +628,10 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 	// keyboard: undo/redo + delete (but not while editing text)
 	useEffect(() => {
 		const onKey = (e: KeyboardEvent) => {
-			if (editing) return
+			if (editing || editingFrame) return
+			// 焦點在任何輸入框(負責人/標籤/房號…)時,Delete/Backspace 是在改字,不是要刪卡
+			const t = e.target as HTMLElement | null
+			if (t && (t.tagName === 'INPUT' || t.tagName === 'TEXTAREA' || t.isContentEditable)) return
 			const mod = e.ctrlKey || e.metaKey
 			if (mod && e.key.toLowerCase() === 'z') {
 				e.preventDefault()
@@ -660,7 +663,7 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 		}
 		window.addEventListener('keydown', onKey)
 		return () => window.removeEventListener('keydown', onKey)
-	}, [selectedId, selectedConnId, editing, undoMgr])
+	}, [selectedId, selectedConnId, editing, editingFrame, undoMgr])
 
 	useEffect(() => {
 		if (editing) editRef.current?.focus()
@@ -1420,8 +1423,13 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 								{/* content tags (top row) — click to filter by tag */}
 								{(() => {
 									let tx = 32
+									const maxX = s.w - 10 // 膠囊不超出卡片右緣
 									return (s.tags || []).slice(0, 2).map((t, i) => {
-										const w = t.length * 11 + 12
+										// CJK ~11px、ASCII ~6.5px(10.5px 字級的實際寬),長英文字不再爆出卡片
+										const est = Array.from(t).reduce((a, ch) => a + (ch.charCodeAt(0) > 255 ? 11 : 6.5), 0) + 14
+										const remain = maxX - tx
+										if (remain < 34) return null // 塞不下就整顆不畫
+										const w = Math.min(est, remain)
 										const x = tx
 										tx += w + 5
 										return (
@@ -1433,7 +1441,7 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 												onTap={(e: any) => { e.cancelBubble = true; setFilter({ type: 'tag', value: t }) }}
 											>
 												<Rect width={w} height={17} cornerRadius={8} fill="rgba(28,26,23,0.1)" />
-												<Text x={6} y={3} text={t} fontSize={10.5} fontFamily={CANVAS_FONT} fill="rgba(28,26,23,0.6)" />
+												<Text x={6} y={3} width={w - 10} wrap="none" ellipsis text={t} fontSize={10.5} fontFamily={CANVAS_FONT} fill="rgba(28,26,23,0.6)" />
 											</Group>
 										)
 									})
