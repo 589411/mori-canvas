@@ -188,6 +188,31 @@ export default function App() {
 	const [status, setStatus] = useState('connecting')
 	const [size, setSize] = useState({ w: window.innerWidth, h: window.innerHeight })
 	const [view, setView] = useState({ x: 0, y: 0, scale: 1 }) // canvas pan/zoom
+	// 自動跟拍:遠端(AI/其他人)新增卡片在視野外時,鏡頭平滑帶過去。
+	// refs 讓 yjs observer(只綁一次)拿得到最新狀態;使用者剛手動操作畫布時暫停跟拍。
+	const viewRef = useRef(view)
+	const sizeRef = useRef({ w: window.innerWidth, h: window.innerHeight })
+	const userPanTs = useRef(0)
+	const followAnim = useRef(0)
+	useEffect(() => {
+		viewRef.current = view
+	}, [view])
+	useEffect(() => {
+		sizeRef.current = size
+	}, [size])
+	function animateViewTo(target: { x: number; y: number; scale: number }) {
+		cancelAnimationFrame(followAnim.current)
+		const from = { ...viewRef.current }
+		const t0 = performance.now()
+		const D = 450
+		const step = (now: number) => {
+			const t = Math.min(1, (now - t0) / D)
+			const e = 1 - Math.pow(1 - t, 3) // easeOutCubic
+			setView({ x: from.x + (target.x - from.x) * e, y: from.y + (target.y - from.y) * e, scale: from.scale + (target.scale - from.scale) * e })
+			if (t < 1) followAnim.current = requestAnimationFrame(step)
+		}
+		followAnim.current = requestAnimationFrame(step)
+	}
 	const [theme, setTheme] = useState(() => (typeof document !== 'undefined' ? document.documentElement.getAttribute('data-theme') || 'light' : 'light'))
 	const toggleTheme = () => {
 		const next = theme === 'dark' ? 'light' : 'dark'
@@ -243,7 +268,7 @@ export default function App() {
 	const [menuOpen, setMenuOpen] = useState(false) // mobile top-bar overflow menu
 	const [installPrompt, setInstallPrompt] = useState<any>(null) // deferred PWA install prompt
 	const [iosInstallHint, setIosInstallHint] = useState(false)
-	const [settings, setSettings] = useState({ localOnly: false, groqKey: true, spacing: 1, autoTidy: true, mode: 'mori', sttSource: 'local', whisperUrl: '' })
+	const [settings, setSettings] = useState({ localOnly: false, groqKey: true, spacing: 1, autoTidy: true, mode: 'mori', sttSource: 'local', whisperUrl: '', harness: true })
 	// bring your own AI: any OpenAI-compatible base + key + model -> visitor's own quota
 	const [byo, setByo] = useState(() => ({ base: localStorage.getItem('wb-llm-base') || '', key: localStorage.getItem('wb-llm-key') || '', model: localStorage.getItem('wb-llm-model') || '' }))
 	const saveByo = (patch: Partial<typeof byo>) =>
@@ -474,7 +499,7 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 			.then((x) => x.json())
 			.catch(() => null)
 		if (r?.ok) {
-			setSettings({ localOnly: r.localOnly, groqKey: r.groqKey, spacing: r.spacing, autoTidy: r.autoTidy, mode: r.mode, sttSource: r.sttSource, whisperUrl: r.whisperUrl || '' })
+			setSettings({ localOnly: r.localOnly, groqKey: r.groqKey, spacing: r.spacing, autoTidy: r.autoTidy, mode: r.mode, sttSource: r.sttSource, whisperUrl: r.whisperUrl || '', harness: r.harness ?? true })
 			setCaps({ moriEar: r.moriEar, whisperServer: r.whisperServer, groqKey: r.groqKey })
 		}
 		if (patch.spacing !== undefined) tidy() // re-arrange so the new spacing shows immediately
@@ -654,6 +679,28 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 		syncFrames()
 		syncT()
 		yShapes.observe(sync)
+		// 自動跟拍:AI/別人新增的卡片落在視野外 → 鏡頭平滑帶過去(自己加的、或剛在手動操作畫布時不搶鏡頭)
+		const followNew = (e: any) => {
+			if (e.transaction?.origin === LOCAL) return
+			if (performance.now() - userPanTs.current < 4000) return
+			const added: any[] = []
+			e.changes?.keys?.forEach((ch: any, key: string) => {
+				if (ch.action !== 'add') return
+				const s: any = yShapes.get(key)
+				if (s && (s as any).type === 'sticky') added.push(s)
+			})
+			if (!added.length) return
+			const v = viewRef.current
+			const sz = sizeRef.current
+			const wx0 = -v.x / v.scale
+			const wy0 = -v.y / v.scale
+			const inView = (s: any) => s.x >= wx0 && s.y >= wy0 && s.x + (s.w || 200) <= wx0 + sz.w / v.scale && s.y + (s.h || 200) <= wy0 + sz.h / v.scale
+			if (added.every(inView)) return
+			const cx = added.reduce((a, s) => a + s.x + (s.w || 200) / 2, 0) / added.length
+			const cy = added.reduce((a, s) => a + s.y + (s.h || 200) / 2, 0) / added.length
+			animateViewTo({ scale: v.scale, x: sz.w / 2 - cx * v.scale, y: sz.h / 2 - cy * v.scale })
+		}
+		yShapes.observe(followNew)
 		yConnectors.observe(syncC)
 		yMeta.observe(syncMeta)
 		yFrames.observe(syncFrames)
@@ -678,6 +725,7 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 		window.addEventListener('resize', onResize)
 		return () => {
 			yShapes.unobserve(sync)
+			yShapes.unobserve(followNew)
 			yConnectors.unobserve(syncC)
 			yMeta.unobserve(syncMeta)
 			yFrames.unobserve(syncFrames)
@@ -739,7 +787,7 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 			.then((x) => x.json())
 			.then((r) => {
 				if (!r?.ok) return
-				setSettings({ localOnly: r.localOnly, groqKey: r.groqKey, spacing: r.spacing, autoTidy: r.autoTidy, mode: r.mode, sttSource: r.sttSource, whisperUrl: r.whisperUrl || '' })
+				setSettings({ localOnly: r.localOnly, groqKey: r.groqKey, spacing: r.spacing, autoTidy: r.autoTidy, mode: r.mode, sttSource: r.sttSource, whisperUrl: r.whisperUrl || '', harness: r.harness ?? true })
 				setCaps({ moriEar: r.moriEar, whisperServer: r.whisperServer, groqKey: r.groqKey })
 				setCfgInfo({ llmGroqModel: r.llmGroqModel, llmOllamaModel: r.llmOllamaModel, sttProvider: r.sttProvider, sttGroqModel: r.sttGroqModel, sttLocalModel: r.sttLocalModel })
 				setSponsor({ url: r.sponsorUrl || '', label: r.sponsorLabel || '贊助', notice: r.demoNotice || '' })
@@ -802,6 +850,7 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 
 	function onWheel(e: any) {
 		e.evt.preventDefault()
+		userPanTs.current = performance.now()
 		const stage = e.target.getStage()
 		const pointer = stage.getPointerPosition()
 		const old = view.scale
@@ -823,6 +872,7 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 		const cx = (p1.x + p2.x) / 2
 		const cy = (p1.y + p2.y) / 2
 		if (pinchRef.current) {
+			userPanTs.current = performance.now()
 			const old = view.scale
 			const wx = (cx - view.x) / old
 			const wy = (cy - view.y) / old
@@ -851,6 +901,16 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 	function applyAgentResponse(r: any, prefix = '') {
 		if (!r || !r.ok) {
 			setBusy(r?.error ? `錯誤:${r.error}` : '錯誤')
+			return
+		}
+		if (r.intent === 'buffered') {
+			// harness:內容已進 buffer,蒸餾後卡片會自己長出來(yjs 廣播)
+			const tail = r.buffered ? `已聽到,累積 ${r.buffered} 字醞釀中…` : '已聽到,整理上板中…'
+			setBusy(`${r.shifted ? '換話題,前段整理上板中 · ' : ''}${tail}`)
+			return
+		}
+		if (r.intent === 'noise') {
+			setBusy('(這段聽起來是閒聊,略過)')
 			return
 		}
 		if (r.intent === 'command') {
@@ -1267,10 +1327,16 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 				draggable
 				onWheel={onWheel}
 				onDragMove={(e: any) => {
-					if (e.target === e.target.getStage()) setView((v) => ({ ...v, x: e.target.x(), y: e.target.y() }))
+					if (e.target === e.target.getStage()) {
+						userPanTs.current = performance.now()
+						setView((v) => ({ ...v, x: e.target.x(), y: e.target.y() }))
+					}
 				}}
 				onDragEnd={(e: any) => {
-					if (e.target === e.target.getStage()) setView((v) => ({ ...v, x: e.target.x(), y: e.target.y() }))
+					if (e.target === e.target.getStage()) {
+						userPanTs.current = performance.now()
+						setView((v) => ({ ...v, x: e.target.x(), y: e.target.y() }))
+					}
 				}}
 				onMouseDown={(e: any) => {
 					if (e.target === e.target.getStage()) {
@@ -1933,10 +1999,30 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 							))}
 						</div>
 
-						<label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 18, cursor: 'pointer', fontSize: 13 }}>
+						<label style={{ display: 'flex', gap: 8, alignItems: 'center', marginBottom: 12, cursor: 'pointer', fontSize: 13 }}>
 							<input type="checkbox" checked={settings.autoTidy} onChange={(e) => saveSettings({ autoTidy: e.target.checked })} />
 							AI 加完內容後自動重排(關掉的話卡片留原地,要自己按「自動排列」)
 						</label>
+
+						<div style={{ fontWeight: 600, fontSize: 14, marginBottom: 6 }}>整理節奏</div>
+						{(() => {
+							const ON = { background: 'var(--accent-soft)', borderColor: 'var(--accent)', color: 'var(--accent)' }
+							return (
+								<div style={{ display: 'flex', gap: 8, marginBottom: 6 }}>
+									<button onClick={() => saveSettings({ harness: true })} style={{ flex: 1, ...(settings.harness ? ON : {}) }}>
+										聚合(建議)
+									</button>
+									<button onClick={() => saveSettings({ harness: false })} style={{ flex: 1, ...(!settings.harness ? ON : {}) }}>
+										即時逐段
+									</button>
+								</div>
+							)
+						})()}
+						<div style={{ fontSize: 12, color: 'var(--ink-soft)', marginBottom: 18, lineHeight: 1.6 }}>
+							{settings.harness
+								? '先聽完一段討論(靜默幾秒或換話題)再蒸餾成 1~3 張重點卡:卡片少而準、本機小模型也跑得動;代價是卡片晚數十秒出現。指令(「幫我排一下」等)仍即時執行。'
+								: '每講一段就整理一次,卡片立刻出現;講話瑣碎時容易長出很多細碎卡片,建議搭配雲端大模型。'}
+						</div>
 
 						<div style={{ borderTop: '1px solid var(--line)', margin: '14px 0 10px', paddingTop: 12 }}>
 							<div style={{ fontWeight: 600, fontSize: 14, marginBottom: 4 }}>用你自己的 AI(選填)</div>
@@ -2056,6 +2142,70 @@ ul{margin:6px 0 12px;padding-left:22px}li{margin:3px 0}p{margin:8px 0}
 					雙擊空白新增 · 雙擊改字 · 拖拉移動 · 點便利貼/連線後 Delete 刪除 · Ctrl+Z 復原 · 空白拖曳平移 · 滾輪縮放
 				</div>
 			)}
+
+			{/* minimap 全局透視圖:所有卡片/圖框的縮影 + 目前視窗框;點一下跳過去 */}
+			{shapes.length > 0 &&
+				(() => {
+					const MW = mobile ? 132 : 176
+					const MH = mobile ? 88 : 116
+					const PAD = 120
+					const xs: number[] = []
+					const ys: number[] = []
+					for (const s of shapes as any[]) {
+						xs.push(s.x, s.x + (s.w || 200))
+						ys.push(s.y, s.y + (s.h || 200))
+					}
+					for (const f of frames as any[]) {
+						xs.push(f.x, f.x + (f.w || 480))
+						ys.push(f.y, f.y + (f.h || 320))
+					}
+					const vx0 = -view.x / view.scale
+					const vy0 = -view.y / view.scale
+					xs.push(vx0, vx0 + size.w / view.scale)
+					ys.push(vy0, vy0 + size.h / view.scale)
+					const x0 = Math.min(...xs) - PAD
+					const x1 = Math.max(...xs) + PAD
+					const y0 = Math.min(...ys) - PAD
+					const y1 = Math.max(...ys) + PAD
+					const k = Math.min(MW / (x1 - x0), MH / (y1 - y0))
+					const ox = (MW - (x1 - x0) * k) / 2
+					const oy = (MH - (y1 - y0) * k) / 2
+					const mx = (wx: number) => ox + (wx - x0) * k
+					const my = (wy: number) => oy + (wy - y0) * k
+					return (
+						<div
+							className="glass float-in"
+							title="全局透視圖:點一下跳到那裡"
+							style={{
+								position: 'fixed',
+								right: 'calc(10px + env(safe-area-inset-right, 0px))',
+								bottom: `calc(${(sponsor.notice || sponsor.url) && !sponsorHidden ? 64 : 12}px + env(safe-area-inset-bottom, 0px))`,
+								zIndex: 1200,
+								width: MW,
+								height: MH,
+								padding: 4,
+								cursor: 'crosshair',
+							}}
+							onClick={(e) => {
+								const r = (e.currentTarget as HTMLElement).getBoundingClientRect()
+								const wx = x0 + (e.clientX - r.left - 4 - ox) / k
+								const wy = y0 + (e.clientY - r.top - 4 - oy) / k
+								userPanTs.current = 0
+								animateViewTo({ scale: view.scale, x: size.w / 2 - wx * view.scale, y: size.h / 2 - wy * view.scale })
+							}}
+						>
+							<svg width={MW} height={MH} style={{ display: 'block' }}>
+								{(frames as any[]).map((f: any) => (
+									<rect key={f.id} x={mx(f.x)} y={my(f.y)} width={Math.max(2, (f.w || 480) * k)} height={Math.max(2, (f.h || 320) * k)} fill="none" stroke="var(--ink-soft)" strokeOpacity={0.5} strokeWidth={1} rx={1.5} />
+								))}
+								{(shapes as any[]).map((s: any) => (
+									<rect key={s.id} x={mx(s.x)} y={my(s.y)} width={Math.max(2.5, (s.w || 200) * k)} height={Math.max(2.5, (s.h || 200) * k)} fill={COLORS[s.color] || COLORS.yellow} rx={1} />
+								))}
+								<rect x={mx(vx0)} y={my(vy0)} width={(size.w / view.scale) * k} height={(size.h / view.scale) * k} fill="var(--accent)" fillOpacity={0.07} stroke="var(--accent)" strokeWidth={1.4} rx={2} />
+							</svg>
+						</div>
+					)
+				})()}
 
 							{/* demo / sponsor banner (only when the host sets SPONSOR_URL / DEMO_NOTICE env) */}
 				{iosInstallHint && (

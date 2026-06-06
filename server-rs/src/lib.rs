@@ -2,6 +2,7 @@ mod agent;
 mod apply;
 mod board_types;
 mod glossary;
+mod harness;
 mod layout;
 mod llm;
 mod prompts;
@@ -122,6 +123,9 @@ struct Settings {
     local_only: bool,
     #[serde(rename = "whisperUrl")]
     whisper_url: String,
+    /// 聚合整理(harness):語音段先過守門分類,內容進 buffer 蒸餾後才上板。
+    /// 關掉 = 舊行為(每段直接餵完整 agent)。
+    harness: bool,
 }
 static SETTINGS: Lazy<Mutex<Settings>> = Lazy::new(|| {
     // capability-aware defaults: no mori-ear (e.g. on a cloud host) => custom/cloud (Groq Whisper)
@@ -135,6 +139,7 @@ static SETTINGS: Lazy<Mutex<Settings>> = Lazy::new(|| {
         stt_source: if has_ws { "local" } else { "cloud" }.into(),
         local_only: false,
         whisper_url: String::new(),
+        harness: true,
     })
 });
 
@@ -325,7 +330,7 @@ async fn summary_markdown(room: &sync::Room, name: &str, local_only: bool, llm: 
 
 // per-room serialization lock (replaces the global lock)
 static ROOM_LOCKS: Lazy<Mutex<HashMap<String, Arc<Mutex<()>>>>> = Lazy::new(|| Mutex::new(HashMap::new()));
-async fn room_lock(name: &str) -> Arc<Mutex<()>> {
+pub(crate) async fn room_lock(name: &str) -> Arc<Mutex<()>> {
     ROOM_LOCKS.lock().await.entry(name.to_string()).or_insert_with(|| Arc::new(Mutex::new(()))).clone()
 }
 
@@ -512,7 +517,7 @@ pub async fn serve(port: u16) {
     // GET/POST /api/settings
     let settings_get = warp::get().and(warp::path!("api" / "settings")).and_then(|| async move {
         let s = SETTINGS.lock().await.clone();
-        let mut o = json!({ "ok": true, "spacing": s.spacing, "autoTidy": s.auto_tidy, "mode": s.mode, "sttSource": s.stt_source, "localOnly": s.local_only, "whisperUrl": s.whisper_url, "groqKey": llm::groq_key().is_some() });
+        let mut o = json!({ "ok": true, "spacing": s.spacing, "autoTidy": s.auto_tidy, "mode": s.mode, "sttSource": s.stt_source, "localOnly": s.local_only, "whisperUrl": s.whisper_url, "harness": s.harness, "groqKey": llm::groq_key().is_some() });
         for src in [llm::config_info(), stt::stt_capabilities(), sponsor_config()] {
             if let (Value::Object(dst), Value::Object(m)) = (&mut o, src) {
                 for (k, v) in m {
@@ -546,11 +551,14 @@ pub async fn serve(port: u16) {
         if let Some(v) = body.get("whisperUrl").and_then(|v| v.as_str()) {
             s.whisper_url = v.chars().take(200).collect();
         }
+        if let Some(v) = body.get("harness").and_then(|v| v.as_bool()) {
+            s.harness = v;
+        }
         // user can paste a Groq key in the UI (no env / ~/.mori needed) -> unlocks cloud STT + AI
         if let Some(v) = body.get("groqApiKey").and_then(|v| v.as_str()) {
             llm::set_runtime_groq_key(v);
         }
-        Ok::<_, warp::Rejection>(warp::reply::json(&json!({ "ok": true, "spacing": s.spacing, "autoTidy": s.auto_tidy, "mode": s.mode, "sttSource": s.stt_source, "localOnly": s.local_only, "whisperUrl": s.whisper_url, "groqKey": llm::groq_key().is_some(), "moriEar": stt::stt_capabilities().get("moriEar").cloned().unwrap_or(json!(false)), "whisperServer": stt::stt_capabilities().get("whisperServer").cloned().unwrap_or(json!(false)) })))
+        Ok::<_, warp::Rejection>(warp::reply::json(&json!({ "ok": true, "spacing": s.spacing, "autoTidy": s.auto_tidy, "mode": s.mode, "sttSource": s.stt_source, "localOnly": s.local_only, "whisperUrl": s.whisper_url, "harness": s.harness, "groqKey": llm::groq_key().is_some(), "moriEar": stt::stt_capabilities().get("moriEar").cloned().unwrap_or(json!(false)), "whisperServer": stt::stt_capabilities().get("whisperServer").cloned().unwrap_or(json!(false)) })))
     });
 
     // POST /api/agent/:room — the AI turn (intent classify -> command or content)
@@ -620,10 +628,15 @@ pub async fn serve(port: u16) {
                 return Ok(warp::reply::json(&json!({ "ok": true, "transcript": "", "stickies": 0 })));
             }
             let by: String = q.get("by").map(|s| s.as_str()).unwrap_or("voice").chars().take(24).collect();
-            let _lk = room_lock(&name).await; let _guard = _lk.lock().await;
-            let mut res = match apply::run_agent_turn(&room, &transcript, &by, s.local_only, s.auto_tidy, s.spacing, &llm).await {
-                Ok(v) => v,
-                Err(e) => json!({ "ok": false, "error": e }),
+            let mut res = if s.harness {
+                // 聚合整理:gate 分流,內容進 buffer,卡片由背景 flush 經 yjs 廣播(鎖由 harness 自己拿)
+                harness::ingest(&name, room.clone(), &transcript, &by, s.local_only, s.auto_tidy, s.spacing, &llm).await
+            } else {
+                let _lk = room_lock(&name).await; let _guard = _lk.lock().await;
+                match apply::run_agent_turn(&room, &transcript, &by, s.local_only, s.auto_tidy, s.spacing, &llm).await {
+                    Ok(v) => v,
+                    Err(e) => json!({ "ok": false, "error": e }),
+                }
             };
             res["transcript"] = json!(transcript);
             Ok(warp::reply::json(&res))
